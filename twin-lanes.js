@@ -382,8 +382,8 @@
       const G = window.TwinGeo, fr = G.frame(ref[0], ref[1]), X = q => fr.toLocal(q[0], q[1])[0].toFixed(3), Y = q => fr.toLocal(q[0], q[1])[1].toFixed(3);
       const meta = ['ChargePoint Digital Twin site plan', fr.crs, `Origin WGS84 ${ref[1].toFixed(7)}, ${ref[0].toFixed(7)}`, 'Units: metres. Source: Esri World Imagery (zoom 19) read by Lane Vision, OpenStreetMap for buildings and roads',
         'Accuracy: imagery-derived estimate, NOT a survey. Check every dimension on site before design or construction', `Exported ${new Date().toISOString()}`];
-      const out = [...meta.flatMap(m => ['999', m]), '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '7'];
-      [['BAYS', 7], ['EV_AC', 3], ['EV_DC', 5], ['ROWS', 8], ['LANES', 2], ['CANOPY', 4], ['NOTES', 1]].forEach(([n, c]) => out.push('0', 'LAYER', '2', n, '70', '0', '62', String(c), '6', 'CONTINUOUS'));
+      const out = [...meta.flatMap(m => ['999', m]), '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '8'];
+      [['BAYS', 7], ['EV_AC', 3], ['EV_DC', 5], ['ROWS', 8], ['LANES', 2], ['CANOPY', 4], ['NOTES', 1], ['CABLE', 30]].forEach(([n, c]) => out.push('0', 'LAYER', '2', n, '70', '0', '62', String(c), '6', 'CONTINUOUS'));
       out.push('0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES');
       const poly = (pts, layer, closed) => { out.push('0', 'POLYLINE', '8', layer, '66', '1', '70', closed ? '1' : '0'); pts.forEach(q => out.push('0', 'VERTEX', '8', layer, '10', X(q), '20', Y(q))); out.push('0', 'SEQEND', '8', layer); };
       const text = (q, s, layer, ht) => out.push('0', 'TEXT', '8', layer, '10', X(q), '20', Y(q), '40', String(ht), '1', s, '72', '1', '11', X(q), '21', Y(q));
@@ -393,6 +393,8 @@
       LVS.out.aisles.forEach(l => poly(l, 'LANES', false));
       if (COVER && COVER.plan && COVER.frame) COVER.plan.forEach(c => { const g = c.poly.map(q => COVER.frame.toGeo(q[0], q[1])); poly(g, 'CANOPY', true); text(COVER.frame.toGeo(c.c[0], c.c[1]), c.name, 'CANOPY', 0.8); });
       text(ref, 'ORIGIN 0,0  imagery-derived, not surveyed', 'NOTES', 0.6);
+      // cable routes from the 3D site (scene metres back to WGS84, then into this drawing's plane)
+      if (S.cableDXF && S.on) { const g3 = (x, z) => [S.lon + x / A.mLon(S.lat), S.lat - z / A.M_LAT]; S.cableDXF().forEach(r => { poly(r.pts.map(q => g3(q[0], q[1])), 'CABLE', false); const e = r.pts[r.pts.length - 1]; text(g3(e[0], e[1] + 1.5), `${r.name} feeder`, 'CABLE', 0.5); }); }
       const p = A.pin();
       out.push('0', 'ENDSEC', '0', 'EOF');
       const note = `ChargePoint site plan. ${p && p.name ? p.name + '. ' : ''}${ev.length} charging stalls on ${all.length} bays. Origin ${ref[1].toFixed(6)}, ${ref[0].toFixed(6)}. Read from satellite imagery: survey before construction.`;

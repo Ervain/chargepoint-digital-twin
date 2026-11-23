@@ -325,3 +325,7 @@ html,body{overflow-x:clip}
 .tw-val[hidden]{display:none}.tw-val header{display:flex;justify-content:space-between;align-items:center}.tw-val header button{appearance:none;border:0;background:none;font-size:18px;cursor:pointer;line-height:1}
 .tw-val p{margin:6px 0}.tw-val-n{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}.tw-val-n span{padding:2px 8px;border-radius:999px;font-weight:700;background:#eef1f4}
 .tw-val .s4{color:#b42318}.tw-val .s3{color:#b54708}.tw-val .s2{color:#a15c07}.tw-val .s1{color:#475467}.tw-val ul{margin:6px 0 0;padding-left:16px}.tw-val li{margin:3px 0}.tw-val li span{color:#667085}
+.tw-cablebtn{background:linear-gradient(90deg,#ff8a00,#ffb547)!important;color:#0f1216!important;border-color:#ff8a00!important}
+.tw-cable{top:auto;bottom:16px;max-height:62%}.tw-cable table{width:100%;border-collapse:collapse;margin:6px 0;font-variant-numeric:tabular-nums}.tw-cable th,.tw-cable td{text-align:left;padding:3px 4px;border-bottom:1px solid #eef1f4}.tw-cable th{font-size:11px;color:#667085}
+.tw-cab-in{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}.tw-cab-in label{display:flex;flex-direction:column;font-size:11px;color:#475467}.tw-cab-in input{font:inherit;padding:4px 6px;border:1px solid #d0d5dd;border-radius:6px}
+.tw-cab-note{font-size:11px;color:#667085}.tw-cab-act{display:flex;gap:6px}.tw-cab-act button{appearance:none;border:1px solid #d0d5dd;background:#fff;border-radius:8px;padding:6px 10px;font:600 12px var(--display);cursor:pointer}
