@@ -15,6 +15,8 @@
     const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'tw-lv'; btn.textContent = 'Lane Vision';
     btn.title = 'Read the satellite photo and outline every parking row, bay and driving lane around the pin';
     pk.after(btn);
+    const mBtn = document.createElement('button'); mBtn.type = 'button'; mBtn.className = 'tw-meas'; mBtn.textContent = '📏 Measure'; mBtn.setAttribute('aria-pressed', 'false');
+    mBtn.title = 'Click points on the map to measure distance and bearing; click the first point again to close a shape and get its area. Esc to finish.'; btn.after(mBtn);
     const hint = A.hint;
 
     // ---- tile maths (Web Mercator, global pixels at zoom 19) ----
@@ -63,8 +65,11 @@
       else { mg.beginPath(); mg.arc(cx - ph.ox, cy - ph.oy, R, 0, 7); mg.fill(); }
       // take buildings and every road that is not a parking aisle out (from the same free map tiles)
       const RW = { motorway: 16, trunk: 14, primary: 13, secondary: 11, tertiary: 9, minor: 8, busway: 7, service: 5.5 };
+      const OBST = { blds: [], roads: [] };
       try { const raw = await A.probe(ctr, 17, m => ({ b: m.querySourceFeatures('openmaptiles', { sourceLayer: 'building' }),
           r: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => { const P = f.properties || {}; return RW[P.class] && P.service !== 'parking_aisle' && !(lot && P.class === 'service'); }) }));
+        raw.b.forEach(f => { const g = f.geometry; (g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []).forEach(pl => OBST.blds.push(pl[0])); });
+        raw.r.forEach(f => { const g = f.geometry; (g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []).forEach(l => OBST.roads.push({ line: l, w: RW[f.properties.class], cls: f.properties.class })); });
         mg.fillStyle = mg.strokeStyle = '#000';
         raw.b.forEach(f => { const g = f.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []; polys.forEach(pl => { mg.beginPath(); pl[0].forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.closePath(); mg.fill(); }); });
         raw.r.forEach(f => { mg.lineWidth = RW[f.properties.class] / mpp; const g = f.geometry, ls = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []; ls.forEach(l => { mg.beginPath(); l.forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.stroke(); }); });
@@ -137,6 +142,9 @@
             db.segs++; db.pk.push(+pk.toFixed(2));
             // inside a mapped car park a clear row is trusted even when the beat is weak (empty or full rows); elsewhere the beat is required
             if (pk < 0.07) { if (!(lot && best >= 0.2)) return; lag = 10; }
+            // stripes finer than a bay (zebra crossings, hatching) also echo at a bay width, as a harmonic: their beat at half that
+            // distance is as strong, and real bays have none there
+            if (pk >= 0.07) { const hl = Math.round(lag / 2); let hs = 0; for (let i = 0; i + hl < Z.length; i++) hs += Z[i] * Z[i + hl]; hs /= E * (Z.length - hl) / Z.length; if (hs > 0.12 && hs > pk * 0.6) { db.zebra = (db.zebra || 0) + 1; return; } }
             const bayM = lag * 0.25, bp = bayM / mpp;
             // phase: start the bays on the painted lines (the strongest edges at the bay rhythm)
             let ph0 = 0, phs = -1; for (let o = 0; o < lag; o++) { let s = 0; for (let i = o; i < P.length; i += lag) s += P[i]; if (s > phs) { phs = s; ph0 = o; } }
@@ -162,7 +170,7 @@
       const [plon, plat] = nb2.c, rot = nearest.rot, name = (p && p.lot && p.lot.label) || (p && p.name) || 'Car park';
       A.setPin(plat, plon, (p && p.name) || null, { rot, lot: { label: name, kind: 'Surface', rows: out.rows, ring: null, lines: null, rot,
         capText: `about ${spaces.toLocaleString('en-US')} spaces in ${out.rows.length} rows, read from the satellite photo` } });
-      LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp }; hookMap(map); tools.hidden = false; draw(map, out);
+      LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp, obst: OBST, lot: lot || null }; hookMap(map); tools.hidden = false; draw(map, out);
       const bw = nearest.bayM.toFixed(2);
       hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays measured ${bw} m wide). Rows were kept only where the photo shows the regular rhythm of parking bays.`);
     }
@@ -278,7 +286,7 @@
     let COVER = null; const cvBtn = tools.querySelector('.tw-lvcover');
     A.dlg.addEventListener('click', e => { if (e.target.closest && e.target.closest('.tw-build') && !(COVER && COVER.starting)) COVER = null; }, true);
     cvBtn.addEventListener('click', () => { if (!LVS || !LVS.runs.length) return; const p = A.pin(); if (!p) return;
-      COVER = { starting: true, runs: LVS.runs, mpp: LVS.mpp, on: true };
+      COVER = { starting: true, runs: LVS.runs, mpp: LVS.mpp, on: true, lot: LVS.lot };
       quiet = true; $('.tw-spots').value = 4; quiet = false;
       if (p.rot === undefined) A.setPin(p.lat, p.lon, p.name || null, Object.assign({}, p, { rot: LVS.nearest.rot }));
       $('.tw-build').click(); COVER.starting = false; applyCover(); });
@@ -295,12 +303,27 @@
       const slotPaths = (S.carSlots || []).map(x => ({ p: pathOf(tpl, x.car), kind: x.kind })).filter(x => x.p);
       const perUnit = { main: 4, dc: 4, ac: 2, single: 1 }[key] || 4;   // bays one canopy serves, as the build counts them
       // where the canopies go: evenly along each row, centred on it
-      const rects = [], plan = []; let skipped = 0;
-      COVER.runs.forEach(r => { const Lm = (r.u1 - r.u0) * COVER.mpp, n = Math.floor((Lm + gap) / (W + gap)); if (n < 1) { skipped++; return; }
+      // every candidate canopy is a rectangle in metres (geometry engine, local plane on WGS84 at the site), checked before it is built:
+      // critical (removed): stands in a mapped building, on a road at its mapped width, on another canopy, or outside a mapped car park;
+      // warning (kept): reaches into the driving lane, or stands closer than 1 m to a building; info: positions are read from imagery
+      const G = window.TwinGeo, fr = G.frame(S.lon, S.lat), L = q => fr.toLocal(q[0], q[1]), ob = LVS && LVS.obst ? LVS.obst : { blds: [], roads: [] };
+      const blds = ob.blds.map(r => r.map(L)), roads = ob.roads.map(r => ({ line: r.line.map(L), w: r.w, cls: r.cls })), lotRing = COVER.lot && COVER.lot.ring ? COVER.lot.ring.map(L) : null;
+      const plan = [], issues = []; let skipped = 0, id = 0;
+      COVER.runs.forEach((r, ri) => { const Lm = (r.u1 - r.u0) * COVER.mpp, n = Math.floor((Lm + gap) / (W + gap)), rowD = (r.v1 - r.v0) * COVER.mpp; if (n < 1) { skipped++; issues.push(G.issue(1, 'fit', [`row ${ri + 1}`], 'Row shorter than one canopy', `${Lm.toFixed(1)} m`, `${W.toFixed(1)} m`)); return; }
         const s0 = (Lm - (n * W + (n - 1) * gap)) / 2, th = T.MathUtils.degToRad(r.rot), vm = (r.v0 + r.v1) / 2;
-        for (let k = 0; k < n; k++) { const a = s0 + W / 2 + k * (W + gap), [lon, lat] = r.toMap(r.u0 + a / COVER.mpp, vm), [x, z] = A.toXZ(lat, lon);
-          const R = { x, z, th, hw: W / 2 + 0.15, hd: Dp / 2 + 0.15 };
-          if (rects.some(q => overlap(q, R))) { skipped++; continue; } rects.push(R); plan.push(R); } });
+        const e0 = L(r.toMap(r.u0, vm)), e1 = L(r.toMap(r.u1, vm)), thL = Math.atan2(e1[1] - e0[1], e1[0] - e0[0]);
+        for (let k = 0; k < n; k++) { const a = s0 + W / 2 + k * (W + gap), ll = r.toMap(r.u0 + a / COVER.mpp, vm), [x, z] = A.toXZ(ll[1], ll[0]), c = L(ll), name = `C${++id}`;
+          const poly = G.rect(c, W, Dp, thL), bad = [];
+          blds.forEach(b => { if (G.polysIntersect(poly, b)) bad.push(G.issue(4, 'building', [name, 'building'], 'Stands in a mapped building', '0 m', '> 0 m')); });
+          if (!bad.length) roads.forEach(rd => { const d = G.distPolyLine(poly, rd.line); if (d < rd.w / 2) bad.push(G.issue(4, 'road', [name, `${rd.cls} road`], 'On a road (centre line plus half its mapped width)', `${d.toFixed(1)} m from centre`, `≥ ${(rd.w / 2).toFixed(1)} m`)); });
+          if (!bad.length) plan.forEach(q => { const o = G.satOverlap(poly, q.poly); if (o > 0.05) bad.push(G.issue(4, 'clash', [name, q.name], 'Overlaps another canopy', `${o.toFixed(2)} m`, '0 m')); });
+          if (!bad.length && lotRing && !G.contains(lotRing, poly)) bad.push(G.issue(4, 'boundary', [name, 'car park'], 'Outside the mapped car park boundary', 'crosses edge', 'inside'));
+          if (bad.length) { skipped++; issues.push(bad[0]); continue; }
+          if (Dp - rowD > 1) issues.push(G.issue(2, 'aisle', [name], 'Canopy reaches into the driving lane', `${(Dp - rowD).toFixed(1)} m`, 'check clear height and turning'));
+          const dB = blds.length ? Math.min(...blds.map(b => G.distPolyPoly(poly, b))) : Infinity; if (dB < 1) issues.push(G.issue(2, 'clearance', [name, 'building'], 'Close to a building', `${dB.toFixed(2)} m`, '≥ 1.0 m'));
+          plan.push({ x, z, th, name, poly, c, thL }); } });
+      issues.push(G.issue(1, 'source', ['all'], 'Positions read from satellite imagery, not surveyed', 'imagery', 'site survey before construction'));
+      COVER.issues = issues;
       const cap = 80; if (plan.length > cap) plan.length = cap;
       // build the units
       const tplCopy = tpl; P.clear(); const slots = [];
@@ -308,7 +331,7 @@
         const ox = bc.x * Math.cos(R.th) + bc.z * Math.sin(R.th), oz = -bc.x * Math.sin(R.th) + bc.z * Math.cos(R.th); c.position.set(R.x - ox, 0, R.z - oz);
         R.ox = bc.x; R.oz = bc.z; R.obj = c; P.add(c); slotPaths.forEach(sp => { const car = atPath(c, sp.p); if (car) slots.push({ car, kind: sp.kind }); }); });
       P.userData.cover = true; S.carSlots = slots; S.list = plan.map(() => key); S.spots = plan.length * perUnit;
-      COVER.plan = plan; COVER.rot0 = S.rot;
+      COVER.plan = plan; COVER.rot0 = S.rot; COVER.W = W; COVER.Dp = Dp; COVER.frame = fr; report(issues, plan.length);
       // buildings: only those a canopy actually stands in are hidden
       unhide(plan);
       // title card and camera
@@ -321,23 +344,46 @@
     }
     function unhide(plan) { const boxes = plan.map(R => A.boxOf(R.obj).expandByScalar(1)); boxes.forEach(b => { b.min.y = -10; b.max.y = 200; });
       (S.blds || []).forEach(m => { m.visible = !boxes.some(b => m.userData.box && m.userData.box.intersectsBox(b)); }); }
-    // two rotated rectangles overlap? (separating axis test on the four edge directions)
-    function overlap(a, b) { const ax = [[Math.cos(a.th), -Math.sin(a.th)], [Math.sin(a.th), Math.cos(a.th)], [Math.cos(b.th), -Math.sin(b.th)], [Math.sin(b.th), Math.cos(b.th)]];
-      const dx = b.x - a.x, dz = b.z - a.z;
-      return ax.every(([ux, uz]) => { const ra = a.hw * Math.abs(ux * Math.cos(a.th) - uz * Math.sin(a.th)) + a.hd * Math.abs(ux * Math.sin(a.th) + uz * Math.cos(a.th));
-        const rb = b.hw * Math.abs(ux * Math.cos(b.th) - uz * Math.sin(b.th)) + b.hd * Math.abs(ux * Math.sin(b.th) + uz * Math.cos(b.th)); return Math.abs(dx * ux + dz * uz) < ra + rb; }); }
+    // validation report on the 3D stage: counts by severity, then the issues, most severe first
+    function report(issues, built) { let el = A.stage.querySelector('.tw-val'); if (!el) { el = document.createElement('aside'); el.className = 'tw-val'; el.setAttribute('aria-live', 'polite'); A.stage.appendChild(el); }
+      const G = window.TwinGeo, n = [0, 0, 0, 0, 0]; issues.forEach(x => n[x.sev]++); const crit = issues.filter(x => x.sev === 4).length;
+      const rows = issues.slice().sort((a, b) => b.sev - a.sev).slice(0, 9).map(x => `<li class="s${x.sev}"><b>${x.level}</b> ${x.objects.join(' · ')}: ${x.reason} <span>${x.measured}${x.required ? ` (needs ${x.required})` : ''}</span></li>`).join('');
+      el.innerHTML = `<header><strong>Engineering check</strong><button type="button" aria-label="Close">×</button></header><p>${built} canopies pass: inside the rows, clear of mapped buildings and roads, no clashes.${crit ? ` ${crit} removed as critical.` : ''}</p>`
+        + `<div class="tw-val-n">${[4, 3, 2, 1].map(k => `<span class="s${k}">${n[k]} ${G.SEV[k]}</span>`).join('')}</div><ul>${rows}</ul>`;
+      el.hidden = false; el.querySelector('button').onclick = () => { el.hidden = true; }; }
     // Turn: each canopy turns about its own centre, the layout stays on the rows
     A.bar.querySelector('.tw-rot').addEventListener('input', () => { if (!COVER || !COVER.on || !COVER.plan || !S.product || !S.product.userData.cover) return; const P = S.product, d = A.T.MathUtils.degToRad(S.rot - COVER.rot0);
       P.rotation.y = 0; COVER.plan.forEach(R => { const th = R.th + d, ox = R.ox * Math.cos(th) + R.oz * Math.sin(th), oz = -R.ox * Math.sin(th) + R.oz * Math.cos(th); R.obj.rotation.y = th; R.obj.position.set(R.x - ox, 0, R.z - oz); }); unhide(COVER.plan); A.draw(); });
     // other controls rebuild the canopies (another model, AC or DC): the cover is laid out again with the new unit
-    setInterval(() => { if (COVER && COVER.on && S.on && S.product && !S.product.userData.cover && !COVER.starting) applyCover(); if (COVER && !S.on) COVER = null; }, 600);
+    setInterval(() => { if (COVER && COVER.on && S.on && S.product && !S.product.userData.cover && !COVER.starting) applyCover(); if (COVER && !S.on) { COVER = null; const v = A.stage.querySelector('.tw-val'); if (v) v.hidden = true; } }, 600);
+
+    // ---- measuring, in metres on the local plane (not in screen pixels, so it never changes with zoom) ----
+    let MS = null; const msFC = () => ({ type: 'FeatureCollection', features: MS && MS.pts.length ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: MS.closed ? [...MS.pts, MS.pts[0]] : MS.pts } }, ...MS.pts.map(q => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: q } }))] : [] });
+    function msDraw(map) { if (!map.getSource('ms')) { map.addSource('ms', { type: 'geojson', data: msFC() });
+        map.addLayer({ id: 'ms-l', type: 'line', source: 'ms', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#FFD23F', 'line-width': 2.5, 'line-dasharray': [2, 1] } });
+        map.addLayer({ id: 'ms-p', type: 'circle', source: 'ms', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 4.5, 'circle-color': '#FFD23F', 'circle-stroke-color': '#0f1216', 'circle-stroke-width': 1.5 } }); }
+      else map.getSource('ms').setData(msFC());
+      const G = window.TwinGeo; if (!MS || !MS.pts.length) return; const fr = G.frame(MS.pts[0][0], MS.pts[0][1]), P = MS.pts.map(q => fr.toLocal(q[0], q[1]));
+      const tot = G.polyLength(MS.closed ? [...P, P[0]] : P), last = P.length > 1 ? G.len(P[P.length - 2], P[P.length - 1]) : 0, br = P.length > 1 ? G.bearing(P[P.length - 2], P[P.length - 1]) : 0;
+      hint(MS.closed ? `Shape: area ${G.area(P).toLocaleString('en-US', { maximumFractionDigits: 1 })} m² (${(G.area(P) / 1e4).toFixed(3)} ha), perimeter ${tot.toFixed(2)} m. Click to start a new measurement.`
+        : P.length > 1 ? `Last segment ${last.toFixed(2)} m at bearing ${br.toFixed(1)}°, total ${tot.toFixed(2)} m over ${P.length - 1} segment${P.length > 2 ? 's' : ''}. Click the first point to close a shape.` : 'Click the next point.'); }
+    mBtn.addEventListener('click', () => { const map = A.map(); if (!map) return; const on = mBtn.getAttribute('aria-pressed') !== 'true'; mBtn.setAttribute('aria-pressed', on);
+      MS = on ? { pts: [], closed: false, pin: A.pin() } : null; if (on) { map.getCanvas().style.cursor = 'crosshair'; hint('Measure: click points on the map. Distances are true metres on the ground.'); } else map.getCanvas().style.cursor = '';
+      if (!map._msHook) { map._msHook = true; map.on('click', e => { if (!MS) return; const q = [e.lngLat.lng, e.lngLat.lat]; const pp = MS.pin; if (pp) A.setPin(pp.lat, pp.lon, pp.name || null, pp);   // measuring never moves the pin
+          if (MS.closed) { MS.pts = []; MS.closed = false; }
+          if (MS.pts.length > 2) { const a = map.project(MS.pts[0]); if (Math.hypot(a.x - e.point.x, a.y - e.point.y) < 10) { MS.closed = true; msDraw(map); return; } }
+          MS.pts.push(q); msDraw(map); }); }
+      if (!on && map.getSource('ms')) map.getSource('ms').setData({ type: 'FeatureCollection', features: [] }); else if (on) msDraw(map); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && MS) mBtn.click(); });
 
     // ---- the drawing for AutoCAD: DXF (R12, metres, north up, origin at the middle of the stalls) ----
     tools.querySelector('.tw-lvdxf').addEventListener('click', () => { if (!LVS) return;
       const ev = evBays(), all = LVS.runs.flatMap(r => r.bays), ref = (ev.length ? ev : all).reduce((a, b, _, arr) => [a[0] + b.c[0] / arr.length, a[1] + b.c[1] / arr.length], [0, 0]);
-      const kx = 111320 * Math.cos(ref[1] * Math.PI / 180), ky = 110540, X = q => ((q[0] - ref[0]) * kx).toFixed(3), Y = q => ((q[1] - ref[1]) * ky).toFixed(3);
-      const out = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '5'];
-      [['BAYS', 7], ['EV_AC', 3], ['EV_DC', 5], ['ROWS', 8], ['LANES', 2]].forEach(([n, c]) => out.push('0', 'LAYER', '2', n, '70', '0', '62', String(c), '6', 'CONTINUOUS'));
+      const G = window.TwinGeo, fr = G.frame(ref[0], ref[1]), X = q => fr.toLocal(q[0], q[1])[0].toFixed(3), Y = q => fr.toLocal(q[0], q[1])[1].toFixed(3);
+      const meta = ['ChargePoint Digital Twin site plan', fr.crs, `Origin WGS84 ${ref[1].toFixed(7)}, ${ref[0].toFixed(7)}`, 'Units: metres. Source: Esri World Imagery (zoom 19) read by Lane Vision, OpenStreetMap for buildings and roads',
+        'Accuracy: imagery-derived estimate, NOT a survey. Check every dimension on site before design or construction', `Exported ${new Date().toISOString()}`];
+      const out = [...meta.flatMap(m => ['999', m]), '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '6', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '7'];
+      [['BAYS', 7], ['EV_AC', 3], ['EV_DC', 5], ['ROWS', 8], ['LANES', 2], ['CANOPY', 4], ['NOTES', 1]].forEach(([n, c]) => out.push('0', 'LAYER', '2', n, '70', '0', '62', String(c), '6', 'CONTINUOUS'));
       out.push('0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES');
       const poly = (pts, layer, closed) => { out.push('0', 'POLYLINE', '8', layer, '66', '1', '70', closed ? '1' : '0'); pts.forEach(q => out.push('0', 'VERTEX', '8', layer, '10', X(q), '20', Y(q))); out.push('0', 'SEQEND', '8', layer); };
       const text = (q, s, layer, ht) => out.push('0', 'TEXT', '8', layer, '10', X(q), '20', Y(q), '40', String(ht), '1', s, '72', '1', '11', X(q), '21', Y(q));
@@ -345,7 +391,9 @@
       all.forEach(b => poly(b.ring.slice(0, 4), b.ev === 'dc' ? 'EV_DC' : b.ev ? 'EV_AC' : 'BAYS', true));
       ev.forEach((b, i) => text(b.c, `${b.ev === 'dc' ? 'DC' : 'AC'}-${i + 1}`, b.ev === 'dc' ? 'EV_DC' : 'EV_AC', 0.5));
       LVS.out.aisles.forEach(l => poly(l, 'LANES', false));
-      const p = A.pin(); text([ref[0], ref[1] + 0], '', 'ROWS', 0.1);
+      if (COVER && COVER.plan && COVER.frame) COVER.plan.forEach(c => { const g = c.poly.map(q => COVER.frame.toGeo(q[0], q[1])); poly(g, 'CANOPY', true); text(COVER.frame.toGeo(c.c[0], c.c[1]), c.name, 'CANOPY', 0.8); });
+      text(ref, 'ORIGIN 0,0  imagery-derived, not surveyed', 'NOTES', 0.6);
+      const p = A.pin();
       out.push('0', 'ENDSEC', '0', 'EOF');
       const note = `ChargePoint site plan. ${p && p.name ? p.name + '. ' : ''}${ev.length} charging stalls on ${all.length} bays. Origin ${ref[1].toFixed(6)}, ${ref[0].toFixed(6)}. Read from satellite imagery: survey before construction.`;
       const blob = new Blob([out.join('\r\n') + '\r\n'], { type: 'application/dxf' });
