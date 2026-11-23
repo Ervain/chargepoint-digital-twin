@@ -79,4 +79,23 @@
   const tb = $('#r-table'); if (tb) new MutationObserver(() => { lastKey = ''; update(); }).observe(tb, { childList: true });
   document.querySelectorAll('.tab,.fam').forEach(b => b.addEventListener('click', () => setTimeout(update, 0)));
   update();
+
+  // ---- scrolling: over the 3D scene the wheel scrolls the page, until the scene is clicked (then it zooms) ----
+  const cvs = stage.querySelector(':scope > canvas');
+  if (cvs) {
+    let armed = false, tip = null, tipT = 0;
+    const wheelTip = document.createElement('div'); wheelTip.className = 'tw-wheel'; wheelTip.setAttribute('aria-hidden', 'true');
+    wheelTip.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? 'Click the scene to zoom, or hold ⌘ and scroll' : 'Click the scene to zoom, or hold Ctrl and scroll';
+    stage.appendChild(wheelTip);
+    cvs.addEventListener('pointerdown', () => { armed = true; wheelTip.classList.remove('is-on'); });
+    stage.addEventListener('pointerleave', () => { armed = false; });
+    stage.addEventListener('wheel', e => {
+      if (e.target !== cvs || armed || e.ctrlKey || e.metaKey || stage.classList.contains('is-full')) return;   // zoom as usual
+      e.stopImmediatePropagation(); e.stopPropagation();                                                          // let the page scroll
+      wheelTip.classList.add('is-on'); clearTimeout(tipT); tipT = setTimeout(() => wheelTip.classList.remove('is-on'), 1400);
+    }, { capture: true, passive: true });
+    const down = document.createElement('button'); down.type = 'button'; down.className = 'tw-down'; down.textContent = 'Specs ↓';
+    down.addEventListener('click', () => { const t = document.querySelector('.tw-about') || document.querySelector('.rail'); if (t) t.scrollIntoView({ behavior: 'smooth' }); });
+    stage.appendChild(down);
+  }
 })();
