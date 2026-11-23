@@ -2664,7 +2664,7 @@ const bar = document.createElement('div'); bar.className = 'tw-sitebar'; bar.hid
 bar.innerHTML = '<div class="tw-live" hidden aria-live="polite"></div><div class="tw-sb-insight" hidden></div><p class="tw-sb-sub" aria-live="polite"></p>'
 + '<label class="tw-sb-row"><span>Turn</span><input type="range" min="0" max="359" value="0" class="tw-rot" aria-label="Turn the canopies"><output class="tw-rotv">0°</output></label>'
 + '<div class="tw-sb-btns"><button type="button" class="tw-sat" aria-pressed="true">Satellite ground</button><button type="button" class="tw-edit">Change site</button><button type="button" class="tw-leave">Leave site</button></div>'
-+ '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-livebtn" aria-pressed="true" title="Match the scene to this moment at the site: real sun position and shadows, night after sunset, live weather and dust haze">Live</button><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-prop">Create proposal</button></div>'
++ '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-livebtn" aria-pressed="true" title="Match the scene to this moment at the site: real sun position and shadows, night after sunset, live weather and dust haze">Live</button><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-hero" title="A cinematic night photo at eye level: a car charging, the station lit, 4K">Hero shot 4K</button><button type="button" class="tw-prop">Create proposal</button></div>'
 + '<p class="tw-sb-credit">Map data © OpenStreetMap contributors · Imagery © Esri, Maxar, Earthstar Geographics</p>';
 stageEl.appendChild(bar);
 const $d = s => dlg.querySelector(s), $b = s => bar.querySelector(s);
@@ -3108,6 +3108,7 @@ const lotM = new T.LineBasicMaterial({ color: 0x8DC63F, transparent: true, opaci
 function drawLot() { if (SITE.lotLine) { SITE.root.remove(SITE.lotLine); SITE.lotLine.traverse(o => o.geometry && o.geometry.dispose()); SITE.lotLine = null; } if (!SITE.lot) return;
 const g = new T.Group(); const P3 = ([lo, la]) => { const [x, z] = toXZ(la, lo); return new T.Vector3(x, 0.06, z); };
 if (SITE.lot.ring) g.add(flat(new T.Line(new T.BufferGeometry().setFromPoints(SITE.lot.ring.map(P3)), lotM), -9.1));
+if (SITE.lot.rows) SITE.lot.rows.forEach(r => g.add(flat(new T.Line(new T.BufferGeometry().setFromPoints(r.map(P3)), lotM), -9.1)));
 else if (SITE.lot.lines) SITE.lot.lines.forEach(l => { const pts = l.map(P3); for (let k = 0; k < pts.length - 1; k++) { const a = pts[k], b = pts[k + 1], d = b.clone().sub(a), L = d.length(); if (L < 0.5) continue;
 const band = flat(new T.Mesh(new T.PlaneGeometry(L, 17), new T.MeshBasicMaterial({ color: 0x3BA9E0, transparent: true, opacity: 0.16, depthWrite: false, toneMapped: false })), -9.15);
 band.rotation.set(-Math.PI / 2, 0, -Math.atan2(d.z, d.x)); band.position.copy(a).add(b).multiplyScalar(0.5); g.add(band);
@@ -3250,6 +3251,35 @@ $b('.tw-4k').addEventListener('click', enhance4k);
 $b('.tw-shot4k').addEventListener('click', async () => { const b = $b('.tw-shot4k'); b.disabled = true; b.textContent = 'Saving…';
 try { const url = render4k(); const blob = await (await fetch(url)).blob(); await saveFile(`chargepoint-${slug(SITE.name)}-4k.jpg`, blob); b.textContent = 'Saved'; } catch (e) { b.textContent = 'Could not save'; }
 setTimeout(() => { b.textContent = 'Save 4K image'; b.disabled = false; }, 1500); });
+function carFrame(car) { car.updateMatrixWorld(true); const inv = new T.Matrix4().copy(car.matrixWorld).invert(), b = new T.Box3(), m = new T.Matrix4();
+car.traverse(o => { if (o.isMesh && o.visible && o.geometry) { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); b.union(o.geometry.boundingBox.clone().applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld))); } });
+const c = b.getCenter(new T.Vector3()), sz = b.getSize(new T.Vector3()), q = new T.Quaternion(); car.getWorldQuaternion(q);
+const along = (sz.x > sz.z ? new T.Vector3(1, 0, 0) : new T.Vector3(0, 0, 1)).applyQuaternion(q).setY(0).normalize();
+return { c: c.applyMatrix4(car.matrixWorld), len: Math.max(sz.x, sz.z), wid: Math.min(sz.x, sz.z), along }; }
+async function heroShot() { const slots = (SITE.carSlots || []).filter(x => x.car && x.car.visible !== false); if (!SITE.product || !slots.length) { say('Build a site with cars first.'); return; }
+const pc = boxOf(SITE.product).getCenter(new T.Vector3());
+const s0 = slots.map(x => ({ x, f: carFrame(x.car) })).sort((p, q) => p.f.c.distanceTo(pc) - q.f.c.distanceTo(pc))[0], f = s0.f;
+const unit = boxOf(s0.x.car.parent).getCenter(new T.Vector3()), toUnit = unit.clone().sub(f.c).setY(0);
+const back = f.along.clone().multiplyScalar((toUnit.dot(f.along) > 0 ? -1 : 1) * (SITE.heroFlip ? -1 : 1));            // from the car's nose (at the charger) to its tail
+const side = new T.Vector3(-back.z, 0, back.x); if (side.dot(pc.clone().sub(f.c)) > 0) side.negate();
+const keep = { pos: camera.position.clone(), tgt: controls.target.clone(), fov: camera.fov, night: ENV.night, live: LV.on };
+const nb = document.getElementById('opt-night'); LV.on = false; if (!ENV.night && nb) nb.click();
+const tail = f.c.clone().addScaledVector(back, f.len / 2 + 0.05); tail.y = 0.75;
+const red = new T.PointLight(SITE.heroFlip ? 0xff2626 : 0xfff0d8, SITE.heroFlip ? 3.2 : 1.6, 7, 2); red.position.copy(tail); red.position.y = SITE.heroFlip ? 0.75 : 0.55; scene.add(red);
+const fill = new T.PointLight(0xbcd4ff, 0.6, 14, 2); fill.position.copy(f.c).addScaledVector(back, 3).addScaledVector(side, 3); fill.position.y = 3.2; scene.add(fill);
+camera.position.copy(f.c).addScaledVector(back, f.len * 1.15).addScaledVector(side, f.len * 0.85); camera.position.y = 1.3;
+controls.target.copy(f.c).addScaledVector(back, -f.len * 0.15); controls.target.y = 0.75; camera.fov = 38; camera.updateProjectionMatrix(); camera.lookAt(controls.target);
+const ex = renderer.toneMappingExposure; renderer.toneMappingExposure = ex * 0.86;
+await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+let url; try { url = render4k(); } finally {
+renderer.toneMappingExposure = ex; scene.remove(red, fill); red.dispose && red.dispose(); fill.dispose && fill.dispose();
+camera.position.copy(keep.pos); controls.target.copy(keep.tgt); camera.fov = keep.fov; camera.updateProjectionMatrix(); controls.update();
+if (!keep.night && ENV.night && nb) nb.click(); LV.on = keep.live; if (keep.live) applyLive(); draw(); }
+return url; }
+SITE.heroShot = heroShot;
+$b('.tw-hero').addEventListener('click', async () => { const b = $b('.tw-hero'); b.disabled = true; b.textContent = 'Rendering…';
+try { const url = await heroShot(); if (url) { const blob = await (await fetch(url)).blob(); await saveFile(`chargepoint-${slug(SITE.name)}-hero-4k.jpg`, blob); b.textContent = 'Saved'; } else b.textContent = 'Hero shot 4K'; } catch (e) { b.textContent = 'Could not render'; }
+setTimeout(() => { b.textContent = 'Hero shot 4K'; b.disabled = false; }, 1500); });
 $b('.tw-leave').addEventListener('click', leaveSite);
 $b('.tw-sat').addEventListener('click', () => { SITE.sat = !SITE.sat; look(); });
 $b('.tw-rot').addEventListener('input', e => { SITE.rot = +e.target.value; $b('.tw-rotv').textContent = SITE.rot + '°'; if (SITE.product) { SITE.product.rotation.y = T.MathUtils.degToRad(SITE.rot); clearFootprint(); draw(); } });
@@ -3269,7 +3299,8 @@ const camRay2 = new T.Raycaster();
 controls.addEventListener('change', () => { if (!SITE.on || !SITE.blds.length) return; const t = controls.target, d = camera.position.clone().sub(t), L = d.length(); if (L < 0.01) return;
 d.divideScalar(L); camRay2.set(t, d); camRay2.far = L + 1; const h = camRay2.intersectObjects(SITE.blds.filter(m => m.visible), false)[0];
 if (h && h.distance - 1 < L) camera.position.copy(t).addScaledVector(d, Math.max(2, h.distance - 1)); });
-SITE.api = { T, scene, camera, controls, renderer, draw, sun, sunPos, RAD, boxOf, toXZ, LV, setLive, applyLive: () => applyLive(), bar, stage: stageEl, say, fetchWx };
+SITE.api = { T, scene, camera, controls, renderer, draw, sun, sunPos, RAD, boxOf, toXZ, LV, setLive, applyLive: () => applyLive(), bar, stage: stageEl, say, fetchWx,
+map: () => map, pin: () => pin, setPin, hint, probe, bldIndex, inBld, inRing, ESRI, mLon, M_LAT, PK, dlg, AISLE_OK, drawLot };
 window.__twin = SITE; document.dispatchEvent(new Event('twin-ready'));
 
 const pform = document.createElement('div'); pform.className = 'tw-pform'; pform.hidden = true; pform.setAttribute('role', 'dialog'); pform.setAttribute('aria-label', 'Create proposal');
@@ -3542,6 +3573,8 @@ requestAnimationFrame(tick);
 <link rel="stylesheet" href="twin-site.css">
 <script src="twin-ui.js"></script>
 <script src="twin-energy.js"></script>
+<script src="twin-lanes.js"></script>
+<script src="twin-reveal.js"></script>
 
 
 </body></html>
