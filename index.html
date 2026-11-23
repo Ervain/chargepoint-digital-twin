@@ -2654,17 +2654,18 @@ SITE.root.visible = false; scene.add(SITE.root);
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'tw-sitebtn'; btn.innerHTML = pinSvg + '<span>Place on a site</span>'; stageEl.appendChild(btn);
   const dlg = document.createElement('div'); dlg.className = 'tw-map'; dlg.hidden = true; dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-label', 'Choose a site');
   dlg.innerHTML = '<div class="tw-map-head"><form class="tw-map-search" role="search"><input type="search" placeholder="Search a place, e.g. Al Wahda Mall, Abu Dhabi" aria-label="Search a place" autocomplete="off"><button type="submit">Search</button></form>'
+    + '<button type="button" class="tw-radar" title="Scan this map view: every car park is found, scored and ranked as a charging site">Site Radar</button>'
     + '<button type="button" class="tw-pk" title="Find and highlight the parking areas in the map view">Find parking</button>'
     + '<div class="tw-map-seg" role="group" aria-label="Map type"><button type="button" data-ms="sat" aria-pressed="true">Satellite</button><button type="button" data-ms="map" aria-pressed="false">Map</button></div>'
     + '<button class="tw-close" type="button" aria-label="Close the map">×</button></div>'
-    + '<div class="tw-map-view"><div class="tw-map-results" hidden></div><div class="tw-map-blocked" hidden></div></div>'
+    + '<div class="tw-map-view"><div class="tw-map-results" hidden></div><div class="tw-map-blocked" hidden></div><div class="tw-sweep" hidden></div><div class="tw-board" hidden></div></div>'
     + '<div class="tw-map-foot"><p class="tw-map-hint" aria-live="polite">Search a place, then click the map where the canopies should stand.</p>'
     + '<label>Parking spots <input type="number" min="1" max="40" value="8" class="tw-spots"></label>'
     + '<label>Chargers <select class="tw-kind"><option value="ac">AC · Halo</option><option value="dc">DC fast · Halo Ray</option></select></label>'
     + '<button type="button" class="tw-build" disabled>Build the site here</button></div>';
   stageEl.appendChild(dlg);
   const bar = document.createElement('div'); bar.className = 'tw-sitebar'; bar.hidden = true;
-  bar.innerHTML = '<p class="tw-sb-sub" aria-live="polite"></p>'
+  bar.innerHTML = '<div class="tw-sb-insight" hidden></div><p class="tw-sb-sub" aria-live="polite"></p>'
     + '<label class="tw-sb-row"><span>Turn</span><input type="range" min="0" max="359" value="0" class="tw-rot" aria-label="Turn the canopies"><output class="tw-rotv">0°</output></label>'
     + '<div class="tw-sb-btns"><button type="button" class="tw-sat" aria-pressed="true">Satellite ground</button><button type="button" class="tw-edit">Change site</button><button type="button" class="tw-leave">Leave site</button></div>'
     + '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-prop">Create proposal</button></div>'
@@ -2754,8 +2755,8 @@ SITE.root.visible = false; scene.add(SITE.root);
     for (const p of pts.slice().reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
     const h = lo.slice(0, -1).concat(up.slice(0, -1)); return h.length >= 3 ? h : null; };
   // car parks from the tiles: named parking points, with an outline and a direction taken from the parking aisles around each one
-  async function parkingFromTiles(bounds) {
-    const c = map.getCenter(), raw = await probe([c.lng, c.lat], Math.max(15.5, map.getZoom()), m => ({
+  async function parkingFromTiles(bounds, rawIn) {
+    const c = map.getCenter(), raw = rawIn || await probe([c.lng, c.lat], Math.max(15.5, map.getZoom()), m => ({
       pts: m.querySourceFeatures('openmaptiles', { sourceLayer: 'poi' }).filter(f => f.properties.class === 'parking' && !/bicycle|motorcycle/.test(f.properties.subclass || '') && f.geometry.type === 'Point'),
       aisles: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => f.properties.service === 'parking_aisle') }));
     const inView = ([lo, la]) => lo >= bounds.getWest() && lo <= bounds.getEast() && la >= bounds.getSouth() && la <= bounds.getNorth();
@@ -2792,11 +2793,120 @@ SITE.root.visible = false; scene.add(SITE.root);
     const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-map-res-x'; x.textContent = 'Hide list'; x.addEventListener('click', () => { list.hidden = true; }); list.appendChild(x);
     list.hidden = false; hint(`Parking areas are outlined in green${source === 'osm' ? ' (exact outlines)' : ''}. Pick one from the list or click it on the map.`);
   }
+
+  // ---- Site Radar: scan the map view, score every car park as a charging site from real map data, rank them, build the winner ----
+  //      Factors (all from OpenStreetMap through the OpenFreeMap tiles, plus mapped chargers from Overpass when it answers):
+  //      destinations within 400 m (where drivers stay), main-road access, charging gap (distance to the nearest mapped charger), car park size.
+  //      The score is an index for comparing sites, never a revenue forecast.
+  const DEST_W = { mall: 4, department_store: 3, supermarket: 3, hotel: 3, hospital: 2, cinema: 3, theatre: 2, university: 2, college: 2, attraction: 2, theme_park: 3, water_park: 3, museum: 2,
+    restaurant: 1, cafe: 1, fast_food: 1, bar: 1, gym: 2, fitness_centre: 2, sports_centre: 2, stadium: 3, office: 0.6, company: 0.6, bank: 0.6, pharmacy: 0.6, clothes: 0.4, shop: 0.3 };
+  const DEST_N = { clothes: ['clothing shop', 'clothing shops'], fast_food: ['fast food outlet', 'fast food outlets'], cafe: ['café', 'cafés'], restaurant: ['restaurant', 'restaurants'], hotel: ['hotel', 'hotels'],
+    supermarket: ['supermarket', 'supermarkets'], mall: ['mall', 'malls'], office: ['office', 'offices'], company: ['office', 'offices'], bank: ['bank', 'banks'], pharmacy: ['pharmacy', 'pharmacies'],
+    department_store: ['department store', 'department stores'], cinema: ['cinema', 'cinemas'], gym: ['gym', 'gyms'], fitness_centre: ['gym', 'gyms'], hospital: ['hospital', 'hospitals'], bar: ['bar', 'bars'],
+    attraction: ['attraction', 'attractions'], theme_park: ['theme park', 'theme parks'], water_park: ['water park', 'water parks'], museum: ['museum', 'museums'], shop: ['shop', 'shops'] };
+  const ROAD_MAIN = { motorway: 1, trunk: 1, primary: 0.85, secondary: 0.6 };
+  async function radarData(bounds) {
+    const c = map.getCenter();
+    const raw = await probe([c.lng, c.lat], Math.max(15.2, map.getZoom()), m => {
+      const poi = m.querySourceFeatures('openmaptiles', { sourceLayer: 'poi' }), tr = m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' });
+      return { pts: poi.filter(f => f.properties.class === 'parking' && !/bicycle|motorcycle/.test(f.properties.subclass || '') && f.geometry.type === 'Point'),
+        aisles: tr.filter(f => f.properties.service === 'parking_aisle'),
+        dest: poi.filter(f => f.geometry.type === 'Point').map(f => ({ c: f.geometry.coordinates, k: f.properties.subclass || f.properties.class, cl: f.properties.class })),
+        chargers: poi.filter(f => /charging_station/.test(f.properties.subclass || '') && f.geometry.type === 'Point').map(f => ({ lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], name: f.properties.name || 'Charging station' })),
+        roads: tr.filter(f => ROAD_MAIN[f.properties.class]).map(f => ({ w: ROAD_MAIN[f.properties.class], g: f.geometry })) }; });
+    // more mapped chargers (operator names) from Overpass, a little beyond the view; skipped if the server is slow
+    const pad = 0.02, bb = [bounds.getSouth() - pad, bounds.getWest() - pad, bounds.getNorth() + pad, bounds.getEast() + pad].map(v => v.toFixed(5)).join(',');
+    try { const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
+      const q = `[out:json][timeout:5];nwr["amenity"="charging_station"](${bb});out center tags;`;
+      const j = await Promise.any(['https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter'].map(u => fetch(u + '?data=' + encodeURIComponent(q), { signal: ctl.signal }).then(r => { if (!r.ok) throw 0; return r.json(); })));
+      clearTimeout(t); ctl.abort();
+      j.elements.forEach(e => { const la = e.lat || (e.center && e.center.lat), lo = e.lon || (e.center && e.center.lon); if (!la) return; const tg = e.tags || {};
+        if (!raw.chargers.some(x => Math.hypot((x.lon - lo) * mLon(la), (x.lat - la) * M_LAT) < 40)) raw.chargers.push({ lon: lo, lat: la, name: tg.name || tg.operator || tg.brand || 'Charging station' }); });
+    } catch (e) {}
+    // one pin per station: the tiles and Overpass often hold the same charger a few dozen metres apart
+    const uniq = []; raw.chargers.forEach(c => { if (!uniq.some(u => Math.hypot((u.lon - c.lon) * mLon(c.lat), (u.lat - c.lat) * M_LAT) < 120)) uniq.push(c); else { const u = uniq.find(u => Math.hypot((u.lon - c.lon) * mLon(c.lat), (u.lat - c.lat) * M_LAT) < 120); if (/^(Tesla Supercharger|Charging station)$/.test(u.name) && c.name.length > u.name.length) u.name = c.name; } });
+    raw.chargers = uniq;
+    return raw;
+  }
+  function scoreLots(lots, raw) {
+    const segs = []; raw.roads.forEach(r => { const L = r.g.type === 'LineString' ? [r.g.coordinates] : r.g.type === 'MultiLineString' ? r.g.coordinates : []; L.forEach(l => { for (let i = 0; i < l.length - 1; i++) segs.push([l[i], l[i + 1], r.w]); }); });
+    return lots.map(l => {
+      const k = mLon(l.lat), d = (lo, la) => Math.hypot((lo - l.lon) * k, (la - l.lat) * M_LAT);
+      let dw = 0, nd = 0; const kinds = {};
+      raw.dest.forEach(p => { const w = DEST_W[p.k] || DEST_W[p.cl] || 0; if (!w) return; const m = d(p.c[0], p.c[1]); if (m < 400) { dw += w * (1 - m / 520); nd++; kinds[p.k] = (kinds[p.k] || 0) + 1; } });
+      let road = 1e9, roadW = 0; segs.forEach(([a, b, w]) => { const ax = (a[0] - l.lon) * k, az = (a[1] - l.lat) * M_LAT, bx = (b[0] - l.lon) * k, bz = (b[1] - l.lat) * M_LAT, vx = bx - ax, vz = bz - az, L2 = vx * vx + vz * vz || 1;
+        const t = Math.max(0, Math.min(1, -(ax * vx + az * vz) / L2)), m = Math.hypot(ax + vx * t, az + vz * t) / w; if (m < road) { road = m; roadW = w; } });
+      let near = 1e9, nearName = '', n1 = 0; raw.chargers.forEach(c => { const m = d(c.lon, c.lat); if (m < near) { near = m; nearName = c.name; } if (m < 1000) n1++; });
+      const spaces = l.area ? Math.round(l.area / 25) : 0;
+      const f = { dwell: Math.round(Math.min(100, 100 * Math.log1p(dw) / Math.log1p(160))), road: Math.round(road > 1e8 ? 0 : Math.max(0, Math.min(100, 100 * (1 - (road - 120) / 1400)))),
+        gap: Math.round(near > 1e8 ? 100 : Math.max(0, Math.min(100, near / 20))), size: Math.round(Math.min(100, spaces / 3)) };
+      const score = Math.round(0.35 * f.dwell + 0.25 * f.gap + 0.2 * f.road + 0.2 * f.size);
+      const kind = f.road >= 70 && f.dwell < 55 ? 'dc' : 'ac';
+      const bays = Math.max(4, Math.min(40, Math.round((spaces || 120) * 0.03 / 2) * 2));
+      const top = Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, c]) => { const nm = DEST_N[n] || [n.replace(/_/g, ' '), n.replace(/_/g, ' ') + 's']; return `${c} ${c === 1 ? nm[0] : nm[1]}`; }).join(', ');
+      return Object.assign(l, { score, f, kind, bays, spaces, nd, top, near: near > 1e8 ? null : Math.round(near), nearName, n1 });
+    }).sort((a, b) => b.score - a.score);
+  }
+  const RADAR = { markers: [] };
+  const clearRadar = () => { RADAR.markers.forEach(m => m.remove()); RADAR.markers = []; $d('.tw-board').hidden = true; };
+  async function runRadar() {
+    if (!map) return; const rb = $d('.tw-radar');
+    if (map.getZoom() < 14.2) { hint('Zoom in to a district first (a few streets across), then run Site Radar.'); return; }
+    clearRadar(); $d('.tw-map-results').hidden = true; rb.disabled = true; hint('Site Radar is scanning this area…');
+    const sw = $d('.tw-sweep'); sw.hidden = false; sw.classList.remove('is-on'); sw.classList.add('is-scan');
+    const b = map.getBounds(), t0 = performance.now();
+    let raw, lots; try { raw = await radarData(b); lots = await parkingFromTiles(b, raw); } catch (e) { raw = null; }
+    rb.disabled = false;
+    if (!raw || !lots || !lots.length) { sw.hidden = true; sw.classList.remove('is-scan'); hint(raw ? 'No car parks are mapped in this view. Move the map or zoom out a little and scan again.' : 'The scan could not reach the map data. Try again in a moment.'); return; }
+    const ranked = scoreLots(lots, raw).slice(0, 12); RADAR.ranked = ranked; RADAR.raw = raw;
+    PK.list = ranked.map((l, i) => Object.assign(l, { i }));
+    showParking({ type: 'FeatureCollection', features: PK.list.map(l => ({ type: 'Feature', properties: { i: l.i }, geometry: l.ring ? { type: 'Polygon', coordinates: [l.ring] } : { type: 'Point', coordinates: [l.lon, l.lat] } })) }, -1);
+    // reveal each site as the beam passes it (bearing from the centre sets the moment), existing chargers in orange
+    sw.classList.remove('is-scan'); void sw.offsetWidth; sw.classList.add('is-on');
+    const c = map.getCenter(), wait = 0, SWEEP = 2400;
+    const bearing = (lo, la) => ((Math.atan2((lo - c.lng) * mLon(c.lat), (la - c.lat) * M_LAT) * 180 / Math.PI) + 360) % 360;
+    raw.chargers.forEach(ch => { const el = document.createElement('div'); el.className = 'tw-rd-ch'; el.title = ch.name; el.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1 3 9h4l-1 6 6-8H8z" fill="currentColor"/></svg>';
+      setTimeout(() => el.classList.add('is-in'), wait + bearing(ch.lon, ch.lat) / 360 * SWEEP); RADAR.markers.push(new maplibregl.Marker({ element: el }).setLngLat([ch.lon, ch.lat]).addTo(map)); });
+    ranked.forEach((l, i) => { const el = document.createElement('button'); el.type = 'button'; el.className = 'tw-rd-pin' + (i === 0 ? ' is-top' : '');
+      el.style.setProperty('--s', l.score); el.innerHTML = `<b>${l.score}</b>${i < 3 ? `<i>#${i + 1}</i>` : ''}`; el.setAttribute('aria-label', `${l.label}, site score ${l.score}`);
+      el.addEventListener('click', ev => { ev.stopPropagation(); focusRank(i); });
+      setTimeout(() => el.classList.add('is-in'), wait + bearing(l.lon, l.lat) / 360 * SWEEP); RADAR.markers.push(new maplibregl.Marker({ element: el }).setLngLat([l.lon, l.lat]).addTo(map)); });
+    setTimeout(() => { sw.hidden = true; board(ranked, raw); }, wait + SWEEP + 200);
+  }
+  const bar5 = (n, v) => `<div class="tw-f"><span>${n}</span><i style="--v:${v}"></i><em>${v}</em></div>`;
+  function board(ranked, raw) {
+    const bd = $d('.tw-board'); bd.innerHTML = '';
+    const h = document.createElement('div'); h.className = 'tw-bd-h'; h.innerHTML = `<b>Site Radar</b><span>${ranked.length} car park${ranked.length > 1 ? 's' : ''} ranked · ${raw.chargers.length} mapped charger${raw.chargers.length === 1 ? '' : 's'} nearby</span>`;
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-close'; x.setAttribute('aria-label', 'Close the ranking'); x.textContent = '×'; x.addEventListener('click', () => { bd.hidden = true; }); h.appendChild(x); bd.appendChild(h);
+    ranked.forEach((l, i) => { const card = document.createElement('div'); card.className = 'tw-bd-card' + (i === 0 ? ' is-top' : ''); card.dataset.i = i;
+      card.innerHTML = `<div class="tw-bd-top"><span class="tw-bd-rank">${i + 1}</span><div class="tw-bd-name"><b></b><span></span></div><span class="tw-bd-score" style="--s:${l.score}">${l.score}</span></div>`
+        + `<div class="tw-bd-f">${bar5('Destinations', l.f.dwell)}${bar5('Charging gap', l.f.gap)}${bar5('Main road', l.f.road)}${bar5('Size', l.f.size)}</div>`
+        + `<p class="tw-bd-why"></p><div class="tw-bd-go"><button type="button" class="tw-bd-build">Build here</button><span></span></div>`;
+      card.querySelector('.tw-bd-name b').textContent = l.label; card.querySelector('.tw-bd-name span').textContent = `${l.kind === 'dc' ? 'DC fast · Halo Ray' : 'AC · Halo'} · start with ${l.bays} bays`;
+      card.querySelector('.tw-bd-why').textContent = [l.nd ? `${l.nd} destinations within 400 m${l.top ? ' (' + l.top + ')' : ''}` : 'Few mapped destinations nearby',
+        l.near !== null ? `nearest mapped charger ${l.near >= 1000 ? (l.near / 1000).toFixed(1) + ' km' : l.near + ' m'} (${l.nearName})` : 'no mapped charger nearby', l.spaces ? `about ${l.spaces} spaces` : ''].filter(Boolean).join(' · ') + '.';
+      card.querySelector('.tw-bd-go span').textContent = i === 0 ? 'Best site in this view' : '';
+      card.addEventListener('click', ev => { if (ev.target.closest('.tw-bd-build')) return; focusRank(i); });
+      card.querySelector('.tw-bd-build').addEventListener('click', () => buildRank(i)); bd.appendChild(card); });
+    const note = document.createElement('p'); note.className = 'tw-bd-note';
+    note.textContent = 'Scores compare sites from OpenStreetMap data: destinations where drivers stay, main-road access, distance to mapped chargers and car park size. An index for choosing sites, not a revenue forecast. Bays: a starting rule of 3% of spaces.';
+    bd.appendChild(note); bd.hidden = false; focusRank(0, true);
+    hint(`Best site here: ${ranked[0].label}, score ${ranked[0].score}. Press Build here, or pick another from the ranking.`);
+  }
+  function focusRank(i, quiet) { const l = RADAR.ranked && RADAR.ranked[i]; if (!l) return;
+    $d('.tw-board').querySelectorAll('.tw-bd-card').forEach(c => c.classList.toggle('is-sel', +c.dataset.i === i));
+    if (!quiet) pickParking(i); else showParking(PK.fc, i); }
+  function buildRank(i) { const l = RADAR.ranked[i]; pickParking(i);
+    $d('.tw-spots').value = l.bays; $d('.tw-kind').value = l.kind;
+    pin.insight = { score: l.score, f: l.f, kind: l.kind, bays: l.bays, nd: l.nd, top: l.top, near: l.near, nearName: l.nearName, n1: l.n1, spaces: l.spaces, rank: i + 1, of: RADAR.ranked.length,
+      chargers: RADAR.raw.chargers.map(c => ({ lat: c.lat, lon: c.lon, name: c.name })) };
+    build(); }
+  $d('.tw-radar').addEventListener('click', runRadar);
   async function findParking() {
     if (!map) return; const btnP = $d('.tw-pk');
     if (map.getZoom() < 14.5) { hint('Zoom in closer first (a district or a mall), then press Find parking.'); return; }
     const b = map.getBounds(), bb = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(v => v.toFixed(5)).join(',');
-    hint('Looking for parking areas in this view…'); btnP.disabled = true; const run = (PK.run = (PK.run || 0) + 1);
+    clearRadar(); hint('Looking for parking areas in this view…'); btnP.disabled = true; const run = (PK.run = (PK.run || 0) + 1);
     const osm = parkingFromOverpass(bb).catch(() => null);
     let fast = null; try { fast = await parkingFromTiles(b); } catch (e) {}
     if (run !== PK.run) return;
@@ -2961,6 +3071,34 @@ SITE.root.visible = false; scene.add(SITE.root);
   function drawLot() { if (SITE.lotLine) { SITE.root.remove(SITE.lotLine); SITE.lotLine.geometry.dispose(); SITE.lotLine = null; } if (!SITE.lot || !SITE.lot.ring) return;
     const pts = SITE.lot.ring.map(([lo, la]) => { const [x, z] = toXZ(la, lo); return new T.Vector3(x, 0.06, z); });
     const ln = new T.Line(new T.BufferGeometry().setFromPoints(pts), lotM); ln.raycast = () => {}; SITE.root.add(ln); SITE.lotLine = ln; }
+
+  // ---- site insight in 3D: a radar pulse spreading from the canopies, mapped chargers within 2 km as pins with their distance, and the score card ----
+  const INS = { g: new T.Group(), rings: [] }; SITE.root.add(INS.g);
+  const ringM = () => new T.MeshBasicMaterial({ color: 0x3BA9E0, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false, side: T.DoubleSide });
+  for (let i = 0; i < 3; i++) { const m = new T.Mesh(new T.RingGeometry(0.985, 1, 160), ringM()); m.rotation.x = -Math.PI / 2; m.position.y = 0.08; m.userData.ph = i / 3; m.raycast = () => {}; INS.g.add(m); INS.rings.push(m); }
+  const pinTex = (title, sub) => { const c = document.createElement('canvas'); c.width = 512; c.height = 152; const g = c.getContext('2d');
+    g.fillStyle = 'rgba(15,17,22,.88)'; g.beginPath(); g.roundRect(4, 4, 504, 112, 56); g.fill();
+    g.fillStyle = '#ff9f1c'; g.beginPath(); g.arc(60, 60, 38, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#111'; g.beginPath(); g.moveTo(66, 30); g.lineTo(44, 66); g.lineTo(60, 66); g.lineTo(54, 92); g.lineTo(78, 54); g.lineTo(62, 54); g.closePath(); g.fill();
+    g.fillStyle = '#fff'; g.font = '600 34px "Helvetica Neue", Helvetica, Arial'; g.textBaseline = 'middle'; g.fillText(title.length > 22 ? title.slice(0, 21) + '…' : title, 114, 44);
+    g.fillStyle = '#c7cdd6'; g.font = '400 28px "Helvetica Neue", Helvetica, Arial'; g.fillText(sub, 114, 84);
+    g.fillStyle = 'rgba(15,17,22,.88)'; g.beginPath(); g.moveTo(240, 116); g.lineTo(272, 116); g.lineTo(256, 148); g.fill();
+    const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; return t; };
+  function drawInsight() {
+    INS.g.children.filter(o => o.isSprite).forEach(o => { INS.g.remove(o); o.material.map.dispose(); o.material.dispose(); });
+    const card = $b('.tw-sb-insight'), I = SITE.insight; INS.g.visible = !!I; card.hidden = !I; if (!I) return;
+    const lab = v => `<div class="tw-f"><span>${v[0]}</span><i style="--v:${v[1]}"></i><em>${v[1]}</em></div>`;
+    card.innerHTML = `<div class="tw-si-top"><span class="tw-bd-score" style="--s:${I.score}">${I.score}</span><div><b>Site score</b><span>#${I.rank} of ${I.of} car parks in the scan · ${I.kind === 'dc' ? 'DC fast recommended' : 'AC recommended'}</span></div></div>`
+      + lab(['Destinations', I.f.dwell]) + lab(['Charging gap', I.f.gap]) + lab(['Main road', I.f.road]) + lab(['Size', I.f.size]);
+    I.chargers.forEach(c => { const [x, z] = toXZ(c.lat, c.lon), d = Math.hypot(x, z); if (d > 2000) return;
+      const sp = new T.Sprite(new T.SpriteMaterial({ map: pinTex(c.name, d >= 1000 ? (d / 1000).toFixed(1) + ' km away' : Math.round(d) + ' m away'), depthTest: false, sizeAttenuation: false, transparent: true, fog: false }));
+      sp.scale.set(0.2, 0.059, 1); sp.center.set(0.5, 0); sp.position.set(x, 6, z); sp.renderOrder = 20; INS.g.add(sp); });
+  }
+  (function pulse(now) { requestAnimationFrame(pulse); if (!SITE.on || !INS.g.visible) return;
+    const f = typeof FSD !== 'undefined' && FSD.on, b = SITE.product ? boxOf(SITE.product) : null;
+    if (b && !INS.c) INS.c = b.getCenter(new T.Vector3());
+    INS.rings.forEach(m => { const t = ((now / 5200) + m.userData.ph) % 1, R = 12 + t * 600; m.scale.setScalar(R); m.material.opacity = (1 - t) * (f ? 0.9 : 0.55);
+      m.material.color.set(t < 0.5 ? 0x3BA9E0 : 0x8DC63F); if (INS.c) m.position.set(INS.c.x, 0.08, INS.c.z); }); })(performance.now());
   // ---- enter, build, leave ----
   let maxD0 = controls.maxDistance;
   function hideStudio() { Object.values(groups).forEach(g => { g.visible = false; }); ENV.villaGroup.visible = false; ground.visible = false; if (ENV.carport) ENV.carport.visible = false; }
@@ -2968,10 +3106,10 @@ SITE.root.visible = false; scene.add(SITE.root);
     SITE.spots = Math.max(1, Math.min(40, parseInt($d('.tw-spots').value, 10) || 8)); $d('.tw-spots').value = SITE.spots;
     SITE.kind = $d('.tw-kind').value; SITE.lat = pin.lat; SITE.lon = pin.lon; SITE.name = pin.name || 'Chosen site'; SITE.token = (SITE.token || 0) + 1; const token = SITE.token;
     if (SITE.hd) setHD(false); if (SITE.ground3) { SITE.root.remove(SITE.ground3); SITE.ground3.geometry.dispose(); SITE.ground3 = null; }
-    SITE.place = pin.full || ''; SITE.lot = pin.lot || null; if (pin.rot !== undefined) { SITE.rot = pin.rot; $b('.tw-rot').value = SITE.rot; $b('.tw-rotv').textContent = SITE.rot + '°'; }
+    SITE.place = pin.full || ''; SITE.lot = pin.lot || null; SITE.insight = pin.insight || null; drawInsight(); if (pin.rot !== undefined) { SITE.rot = pin.rot; $b('.tw-rot').value = SITE.rot; $b('.tw-rotv').textContent = SITE.rot + '°'; }
     drawLot();
     dlg.hidden = true; SITE.on = true; SITE.root.visible = true; bar.hidden = false; btn.hidden = true; stageEl.classList.add('is-site');
-    hideStudio(); applyEnv(); placeProduct(); frameSite(); setTitle(); controls.maxDistance = 420;
+    hideStudio(); applyEnv(); placeProduct(); INS.c = null; frameSite(); setTitle(); controls.maxDistance = 420;
     say('Loading the real buildings and the satellite ground…');
     SITE.area = ''; const named = !!pin.name;
     fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${pin.lat}&lon=${pin.lon}`).then(r => r.json()).then(j => { if (token !== SITE.token || !j) return; const a = j.address || {};
@@ -3120,7 +3258,7 @@ SITE.root.visible = false; scene.add(SITE.root);
       term_years: v.term_years ? parseFloat(v.term_years) : 'TBD', host_revenue_share_pct: v.host_revenue_share_pct ? parseFloat(v.host_revenue_share_pct) : 'TBD',
       capex_aed: 'TBD', implementation_weeks: v.implementation_weeks ? parseFloat(v.implementation_weeks) : 'TBD', validity_days: 30,
       visuals: ['site-cover-4k.jpg', 'site-layout-4k.jpg', 'site-drivers-view-4k.jpg', 'site-fsd-4k.jpg'],
-      site: { lat: +SITE.lat.toFixed(6), lon: +SITE.lon.toFixed(6), canopies: Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`), battery_kwh: SITE.spots * 45, solar_panels: SITE.spots * 6, parking_area: SITE.lot ? `${SITE.lot.label}, ${SITE.lot.capText}` : null },
+      site: { lat: +SITE.lat.toFixed(6), lon: +SITE.lon.toFixed(6), canopies: Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`), battery_kwh: SITE.spots * 45, solar_panels: SITE.spots * 6, parking_area: SITE.lot ? `${SITE.lot.label}, ${SITE.lot.capText}` : null, insight: SITE.insight ? Object.assign({}, SITE.insight, { chargers: undefined }) : null },
       notes: 'Generated by the ChargePoint Digital Twin site planner. Every TBD is a value Hany has not confirmed.' };
     if (/^CP-PRP-\d{4}-\d{3}$/.test((v.ref || '').trim())) d.ref = v.ref.trim();
     return d;
@@ -3206,6 +3344,10 @@ figure{margin:8px 0 12px}figure img{width:100%;display:block;border-radius:4px}f
   <div class="two">${fig(img.eye, "Driver's view on arrival")}${fig(img.fsd, 'Smart station view: live bays, charging status and surroundings')}</div>
   <p class="muted">Views generated from the ChargePoint Digital Twin on satellite imagery (Esri, Maxar, Earthstar Geographics) and building data (OpenStreetMap contributors). Final layout follows the site survey.</p>
   <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>4</span></div></section>
+${d.site.insight ? `<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  ${d.site.insight ? `${H('03', 'Proposed Solution')}<h3>Why this site</h3>${T2(['Factor', 'Score', 'From the map'], [['Destinations where drivers stay', String(d.site.insight.f.dwell), d.site.insight.nd ? `${d.site.insight.nd} within 400 m${d.site.insight.top ? ', including ' + d.site.insight.top : ''}` : 'Few mapped'], ['Charging gap', String(d.site.insight.f.gap), d.site.insight.near !== null ? `Nearest mapped charger ${d.site.insight.near >= 1000 ? (d.site.insight.near / 1000).toFixed(1) + ' km' : d.site.insight.near + ' m'} away` : 'No mapped charger nearby'], ['Main road access', String(d.site.insight.f.road), 'Distance to the nearest motorway, trunk or primary road'], ['Car park size', String(d.site.insight.f.size), d.site.insight.spaces ? `About ${d.site.insight.spaces} spaces` : 'Not mapped'], ['Site score', `${d.site.insight.score} / 100`, `Ranked #${d.site.insight.rank} of ${d.site.insight.of} car parks scanned in the area`]])}<p class="muted">Site Radar index from OpenStreetMap data, used to compare sites. It is not a revenue forecast.</p>` : ''}
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span></span></div></section>
+` : ''}
 <section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
   <h3>Power and connection</h3>
   ${d.grid_connection === 'yes' ? P('A new grid connection is required. ChargePoint prepares the load application and coordinates the connection with the utility; the connection lead time sits on the critical path in section 06.')
@@ -3271,96 +3413,7 @@ requestAnimationFrame(tick);
 })();
 </script>
 <link rel="stylesheet" href="maplibre-gl.css">
-<style>
-/* ---------- site planner ---------- */
-.tw-sitebtn{position:absolute;left:16px;bottom:16px;z-index:4;display:inline-flex;align-items:center;gap:8px;appearance:none;border:0;cursor:pointer;
-  font:600 13px var(--display);color:var(--fg);background:rgba(255,255,255,.86);backdrop-filter:saturate(1.8) blur(20px);-webkit-backdrop-filter:saturate(1.8) blur(20px);
-  padding:11px 16px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
-.tw-sitebtn svg{width:16px;height:16px;color:#3BA9E0}
-.tw-sitebtn[hidden]{display:none}
-.tw-help{bottom:70px!important}
-.stage.is-site .tw-help{display:none}
-.tw-sitebtn:focus-visible,.tw-map button:focus-visible,.tw-map input:focus-visible,.tw-map select:focus-visible,.tw-sitebar button:focus-visible{outline:2px solid #3BA9E0;outline-offset:2px}
-.tw-map{position:absolute;inset:16px;z-index:8;display:flex;flex-direction:column;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.25);color:var(--fg)}
-.tw-map[hidden]{display:none}
-.tw-map-head{display:flex;align-items:center;gap:10px;padding:12px 12px 12px 14px;border-bottom:1px solid var(--line)}
-.tw-map-search{flex:1;display:flex;gap:8px;min-width:0}
-.tw-map-search input{flex:1;min-width:0;font:500 15px var(--display);padding:10px 14px;border-radius:12px;border:1px solid rgba(29,29,31,.16);background:#fbfbfd;color:var(--fg)}
-.tw-map-search button,.tw-build{appearance:none;border:0;cursor:pointer;font:600 14px var(--display);padding:10px 16px;border-radius:12px;background:var(--fg);color:#fff;white-space:nowrap}
-.tw-build{background:linear-gradient(90deg,var(--b0),var(--b1))}
-.tw-build:disabled{opacity:.4;cursor:default}
-.tw-map-seg{display:flex;gap:2px;background:rgba(29,29,31,.07);border-radius:10px;padding:2px}
-.tw-map-seg button{appearance:none;border:0;background:none;font:500 13px var(--display);padding:7px 12px;border-radius:8px;cursor:pointer;color:var(--fg)}
-.tw-map-seg button[aria-pressed=true]{background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.16)}
-.tw-map-view{flex:1;min-height:0;position:relative;background:#e9e7e2}
-.tw-map-foot{display:flex;align-items:center;flex-wrap:wrap;gap:10px 18px;padding:12px 14px;border-top:1px solid var(--line)}
-.tw-map-hint{flex:1 1 260px;margin:0;font:500 13px/1.4 var(--display);color:var(--dim)}
-.tw-map-foot label{display:flex;align-items:center;gap:8px;font:500 13px var(--display);color:var(--dim)}
-.tw-map-foot input,.tw-map-foot select{font:600 14px var(--display);padding:8px 10px;border-radius:10px;border:1px solid rgba(29,29,31,.16);background:#fff;color:var(--fg)}
-.tw-map-foot input{width:72px}
-.tw-sitebar{position:absolute;left:16px;bottom:16px;z-index:4;width:min(340px,calc(100% - 32px));display:grid;gap:10px;padding:14px 16px;border-radius:20px;
-  background:rgba(255,255,255,.86);backdrop-filter:saturate(1.8) blur(22px);-webkit-backdrop-filter:saturate(1.8) blur(22px);box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.1)}
-.tw-sitebar[hidden]{display:none}
-.tw-sitebar p{margin:0}
-.tw-sb-sub{font:500 13px/1.4 var(--display);color:var(--dim)}
-.tw-sb-row{display:flex;align-items:center;gap:10px;font:600 13px var(--display)}
-.tw-sb-row input{flex:1;accent-color:#3BA9E0}
-.tw-sb-row output{font:600 13px var(--display);font-variant-numeric:tabular-nums;width:38px;text-align:right}
-.tw-sb-btns{display:flex;flex-wrap:wrap;gap:6px}
-.tw-sb-btns button{appearance:none;border:0;cursor:pointer;font:500 12px var(--display);padding:7px 11px;border-radius:999px;background:rgba(29,29,31,.07);color:var(--fg)}
-.tw-sb-btns .tw-sat[aria-pressed=true]{background:var(--fg);color:#fff}
-.tw-sb-btns .tw-leave{margin-left:auto}
-.tw-sb-credit{font:400 10px/1.3 var(--display);color:var(--faint)}
-.stage.is-night .tw-sitebtn,.stage.is-night .tw-sitebar{background:rgba(28,30,34,.8);color:#e8e8ed}
-.stage.is-night .tw-sb-btns button{background:rgba(255,255,255,.1);color:#e8e8ed}
-.stage.is-night .tw-sb-btns .tw-sat[aria-pressed=true]{background:#f5f5f7;color:#1d1d1f}
-.stage.is-night .tw-sb-sub{color:#a1a1a6}
-@media (max-width:1100px){.stage.is-site .nav.tw-models{display:none}}
-@media (max-width:760px){
-  .tw-sitebtn{left:10px;bottom:12px;right:calc(50% + 4px);justify-content:center}
-  .tw-optbtn{left:calc(50% + 4px)!important}
-  .tw-map{inset:0;border-radius:20px}
-  .tw-map-head{flex-wrap:wrap}
-  .tw-map-search{order:3;flex-basis:100%}
-  .tw-sitebar{left:10px;right:10px;width:auto;bottom:62px}
-}
-.stage.is-site .tw-name{font-size:clamp(24px,2.4vw,34px);line-height:1.1;letter-spacing:-.03em}
-.stage.is-site .tw-sub{font-variant-numeric:tabular-nums}
-.tw-map-results{position:absolute;left:12px;top:12px;z-index:3;width:min(360px,calc(100% - 64px));max-height:calc(100% - 24px);overflow:auto;display:grid;gap:2px;padding:6px;border-radius:14px;background:rgba(255,255,255,.95);box-shadow:0 8px 24px rgba(0,0,0,.18)}
-.tw-map-results[hidden],.tw-map-blocked[hidden]{display:none}
-.tw-map-res{appearance:none;border:0;background:none;text-align:left;display:grid;gap:1px;padding:8px 10px;border-radius:10px;cursor:pointer;color:var(--fg)}
-.tw-map-res b{font:600 14px var(--display)}.tw-map-res span{font:400 12px var(--display);color:var(--dim)}
-.tw-map-res:hover{background:rgba(29,29,31,.05)}.tw-map-res[aria-current=true]{background:rgba(59,169,224,.12)}
-.tw-map-res-x{appearance:none;border:0;background:none;font:500 12px var(--display);color:var(--dim);padding:6px 10px;text-align:left;cursor:pointer}
-.tw-map-blocked{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:24px;text-align:center;background:#f5f5f7;font:400 15px/1.5 var(--display);color:var(--fg)}
-.tw-map-blocked p{margin:0;max-width:34em}.tw-map-blocked a{font:600 16px var(--display);color:#1F7FB3}
-.tw-pk{appearance:none;border:0;cursor:pointer;font:600 13px var(--display);padding:9px 14px;border-radius:10px;color:#fff;background:linear-gradient(90deg,var(--b0),var(--b1));white-space:nowrap}
-.tw-pk:disabled{opacity:.5;cursor:default}
-.tw-map-res-h{margin:4px 10px 6px;font:600 12px var(--display);color:var(--dim)}
-.tw-sb-main button{background:linear-gradient(90deg,rgba(59,169,224,.16),rgba(141,198,63,.16));font-weight:600}
-.tw-sb-main .tw-4k[aria-pressed=true]{background:linear-gradient(90deg,var(--b0),var(--b1));color:#fff}
-.tw-sb-main .tw-prop{background:var(--fg);color:#fff}
-.stage.is-night .tw-sb-main .tw-prop{background:#f5f5f7;color:#1d1d1f}
-.tw-sb-main button:disabled{opacity:.6}
-.tw-pform{position:absolute;inset:16px;z-index:9;display:flex;justify-content:flex-end;pointer-events:none}
-.tw-pform[hidden]{display:none}
-.tw-pf{pointer-events:auto;width:min(460px,100%);height:100%;display:flex;flex-direction:column;background:#fff;color:var(--fg);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.25);overflow:hidden}
-.tw-pf-head{display:flex;align-items:center;padding:14px 14px 10px 18px;border-bottom:1px solid var(--line)}
-.tw-pf-head h3{flex:1;margin:0;font:700 17px var(--display);letter-spacing:-.02em}
-.tw-pf-body{flex:1;overflow:auto;padding:10px 18px 16px;display:grid;gap:10px;align-content:start}
-.tw-pf fieldset{border:0;margin:0;padding:0;display:grid;gap:8px}
-.tw-pf legend{font:600 11px var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:6px 0 2px}
-.tw-pf label{display:grid;gap:4px;font:500 12px var(--display);color:var(--dim)}
-.tw-pf input,.tw-pf select{font:500 14px var(--display);color:var(--fg);padding:9px 11px;border-radius:10px;border:1px solid rgba(29,29,31,.16);background:#fbfbfd;min-width:0;width:100%}
-.tw-pf input[type=file]{padding:7px}
-.tw-pf-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.tw-pf-note{margin:0;font:400 12px/1.45 var(--display);color:var(--dim)}
-.tw-pf-foot{display:flex;align-items:center;gap:12px;padding:12px 18px;border-top:1px solid var(--line)}
-.tw-pf-status{flex:1;margin:0;font:500 12px/1.4 var(--display);color:var(--dim)}
-@media (max-width:760px){.tw-pform{inset:0}.tw-pf{width:100%;border-radius:20px}.tw-map-head .tw-pk{order:2}}
-.tw-prop-view{position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.55);display:flex}
-.tw-prop-view iframe{flex:1;border:0;background:#e2e8f0}
-</style>
+<link rel="stylesheet" href="twin-site.css">
 <style>
 /* ---------- interface v2: the 3D stage is the page. Title and live specs on the scene, model bar at the bottom,
    options in a tabbed side panel (a bottom sheet on phones). Signature: the charge line fills and the specs count up on every model change. ---------- */
