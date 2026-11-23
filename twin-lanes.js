@@ -162,7 +162,7 @@
       const [plon, plat] = nb2.c, rot = nearest.rot, name = (p && p.lot && p.lot.label) || (p && p.name) || 'Car park';
       A.setPin(plat, plon, (p && p.name) || null, { rot, lot: { label: name, kind: 'Surface', rows: out.rows, ring: null, lines: null, rot,
         capText: `about ${spaces.toLocaleString('en-US')} spaces in ${out.rows.length} rows, read from the satellite photo` } });
-      LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp }; hookMap(map); tools.hidden = false; draw(map, out);
+      LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp }; hookMap(map); tools.hidden = false; draw(map, out);
       const bw = nearest.bayM.toFixed(2);
       hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays measured ${bw} m wide). Rows were kept only where the photo shows the regular rhythm of parking bays.`);
     }
@@ -216,7 +216,7 @@
     // tools bar under the map, shown once the bays are read
     const tools = document.createElement('div'); tools.className = 'tw-lvtools'; tools.hidden = true;
     tools.innerHTML = '<button type="button" class="tw-lvdraw" aria-pressed="false" title="Drag across bays to make them charging stalls. Hold Shift to remove. Right-click a stall for more.">✎ Draw stalls</button>'
-      + '<span class="tw-lvstat"></span><button type="button" class="tw-lvdxf" title="Download the layout as an AutoCAD drawing (DXF): bays, charging stalls, lanes, in metres">Site plan · DXF</button>';
+      + '<span class="tw-lvstat"></span><button type="button" class="tw-lvcover" title="Put canopies along every parking row found, staying inside the car park, then build">▦ Cover whole car park</button><button type="button" class="tw-lvdxf" title="Download the layout as an AutoCAD drawing (DXF): bays, charging stalls, lanes, in metres">Site plan · DXF</button>';
     A.dlg.querySelector('.tw-map-foot').before(tools);
     const drawBtn = tools.querySelector('.tw-lvdraw'); let drawing = false;
     const setDraw = on => { drawing = on; drawBtn.setAttribute('aria-pressed', on); const map = LVS && LVS.map; if (!map) return;
@@ -273,6 +273,64 @@
         LVS.edited = true; paint(); closeMenu(); if (msg) setTimeout(() => hint(msg), 30); });
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMenu(); if (drawing) setDraw(false); } });
+
+    // ---- cover the whole car park: a canopy row along every parking row found, never outside a row, never two canopies on top of each other ----
+    let COVER = null; const cvBtn = tools.querySelector('.tw-lvcover');
+    A.dlg.addEventListener('click', e => { if (e.target.closest && e.target.closest('.tw-build') && !(COVER && COVER.starting)) COVER = null; }, true);
+    cvBtn.addEventListener('click', () => { if (!LVS || !LVS.runs.length) return; const p = A.pin(); if (!p) return;
+      COVER = { starting: true, runs: LVS.runs, mpp: LVS.mpp, on: true };
+      quiet = true; $('.tw-spots').value = 4; quiet = false;
+      if (p.rot === undefined) A.setPin(p.lat, p.lon, p.name || null, Object.assign({}, p, { rot: LVS.nearest.rot }));
+      $('.tw-build').click(); COVER.starting = false; applyCover(); });
+    // three.js copies userData as JSON, which fails on the scene's links between parts; clone without it, then share it back
+    function cloneUnit(src) { const keep = []; src.traverse(o => { keep.push(o.userData); o.userData = {}; });
+      let c; try { c = src.clone(true); } finally { let i = 0; src.traverse(o => { o.userData = keep[i++]; }); }
+      let j = 0; const srcs = []; src.traverse(o => srcs.push(o)); c.traverse(o => { o.userData = srcs[j++].userData; }); return c; }
+    const pathOf = (root, o) => { const P = []; while (o && o !== root) { P.unshift(o.parent.children.indexOf(o)); o = o.parent; } return o === root ? P : null; };
+    const atPath = (root, P) => P.reduce((o, i) => o && o.children[i], root);
+    function applyCover() { const P = S.product; if (!COVER || !COVER.on || !P || !P.children.length) return; const T = A.T;
+      const tpl = P.children[0], key = (S.list && S.list[0]) || 'main';
+      P.rotation.y = 0; P.position.set(0, 0, 0); tpl.rotation.set(0, 0, 0); tpl.position.set(0, 0, 0); P.updateMatrixWorld(true);
+      const bx = A.boxOf(tpl), sz = bx.getSize(new T.Vector3()), bc = bx.getCenter(new T.Vector3()), W = sz.x, Dp = sz.z, gap = 0.6;
+      const slotPaths = (S.carSlots || []).map(x => ({ p: pathOf(tpl, x.car), kind: x.kind })).filter(x => x.p);
+      const perUnit = { main: 4, dc: 4, ac: 2, single: 1 }[key] || 4;   // bays one canopy serves, as the build counts them
+      // where the canopies go: evenly along each row, centred on it
+      const rects = [], plan = []; let skipped = 0;
+      COVER.runs.forEach(r => { const Lm = (r.u1 - r.u0) * COVER.mpp, n = Math.floor((Lm + gap) / (W + gap)); if (n < 1) { skipped++; return; }
+        const s0 = (Lm - (n * W + (n - 1) * gap)) / 2, th = T.MathUtils.degToRad(r.rot), vm = (r.v0 + r.v1) / 2;
+        for (let k = 0; k < n; k++) { const a = s0 + W / 2 + k * (W + gap), [lon, lat] = r.toMap(r.u0 + a / COVER.mpp, vm), [x, z] = A.toXZ(lat, lon);
+          const R = { x, z, th, hw: W / 2 + 0.15, hd: Dp / 2 + 0.15 };
+          if (rects.some(q => overlap(q, R))) { skipped++; continue; } rects.push(R); plan.push(R); } });
+      const cap = 80; if (plan.length > cap) plan.length = cap;
+      // build the units
+      const tplCopy = tpl; P.clear(); const slots = [];
+      plan.forEach(R => { const c = cloneUnit(tplCopy); c.rotation.set(0, R.th, 0);
+        const ox = bc.x * Math.cos(R.th) + bc.z * Math.sin(R.th), oz = -bc.x * Math.sin(R.th) + bc.z * Math.cos(R.th); c.position.set(R.x - ox, 0, R.z - oz);
+        R.ox = bc.x; R.oz = bc.z; R.obj = c; P.add(c); slotPaths.forEach(sp => { const car = atPath(c, sp.p); if (car) slots.push({ car, kind: sp.kind }); }); });
+      P.userData.cover = true; S.carSlots = slots; S.list = plan.map(() => key); S.spots = plan.length * perUnit;
+      COVER.plan = plan; COVER.rot0 = S.rot;
+      // buildings: only those a canopy actually stands in are hidden
+      unhide(plan);
+      // title card and camera
+      const li = document.querySelectorAll('#tw-stats li b'); if (li.length >= 3) { const unit = (li[1].textContent.split('× ')[1] || 'canopy').split(' +')[0];
+        li[0].textContent = String(S.spots); li[1].textContent = `${plan.length} × ${unit}`; li[2].textContent = `${(S.spots * 45).toLocaleString('en-US')} kWh`; }
+      const all = A.boxOf(P), c0 = all.getCenter(new T.Vector3()), s3 = all.getSize(new T.Vector3()), rr = Math.max(s3.x, s3.z) * 0.5 + 10;
+      A.controls.dispatchEvent({ type: 'start' }); A.controls.target.copy(c0); A.camera.position.copy(c0).add(new T.Vector3(0.6, 0.75, 0.9).normalize().multiplyScalar(rr * 2.1)); A.controls.update(); A.draw();
+      const msg = `Whole car park covered: ${plan.length} canopies over ${S.spots} bays along ${COVER.runs.length} rows, all inside the parking rows.${skipped ? ` ${skipped} spot${skipped > 1 ? 's were' : ' was'} left out where a row is shorter than a canopy or two canopies would touch.` : ''} Turn rotates each canopy in place.`;
+      [300, 9000].forEach(t => setTimeout(() => { if (COVER && COVER.on && S.on) A.say(msg); }, t));
+    }
+    function unhide(plan) { const boxes = plan.map(R => A.boxOf(R.obj).expandByScalar(1)); boxes.forEach(b => { b.min.y = -10; b.max.y = 200; });
+      (S.blds || []).forEach(m => { m.visible = !boxes.some(b => m.userData.box && m.userData.box.intersectsBox(b)); }); }
+    // two rotated rectangles overlap? (separating axis test on the four edge directions)
+    function overlap(a, b) { const ax = [[Math.cos(a.th), -Math.sin(a.th)], [Math.sin(a.th), Math.cos(a.th)], [Math.cos(b.th), -Math.sin(b.th)], [Math.sin(b.th), Math.cos(b.th)]];
+      const dx = b.x - a.x, dz = b.z - a.z;
+      return ax.every(([ux, uz]) => { const ra = a.hw * Math.abs(ux * Math.cos(a.th) - uz * Math.sin(a.th)) + a.hd * Math.abs(ux * Math.sin(a.th) + uz * Math.cos(a.th));
+        const rb = b.hw * Math.abs(ux * Math.cos(b.th) - uz * Math.sin(b.th)) + b.hd * Math.abs(ux * Math.sin(b.th) + uz * Math.cos(b.th)); return Math.abs(dx * ux + dz * uz) < ra + rb; }); }
+    // Turn: each canopy turns about its own centre, the layout stays on the rows
+    A.bar.querySelector('.tw-rot').addEventListener('input', () => { if (!COVER || !COVER.on || !COVER.plan || !S.product || !S.product.userData.cover) return; const P = S.product, d = A.T.MathUtils.degToRad(S.rot - COVER.rot0);
+      P.rotation.y = 0; COVER.plan.forEach(R => { const th = R.th + d, ox = R.ox * Math.cos(th) + R.oz * Math.sin(th), oz = -R.ox * Math.sin(th) + R.oz * Math.cos(th); R.obj.rotation.y = th; R.obj.position.set(R.x - ox, 0, R.z - oz); }); unhide(COVER.plan); A.draw(); });
+    // other controls rebuild the canopies (another model, AC or DC): the cover is laid out again with the new unit
+    setInterval(() => { if (COVER && COVER.on && S.on && S.product && !S.product.userData.cover && !COVER.starting) applyCover(); if (COVER && !S.on) COVER = null; }, 600);
 
     // ---- the drawing for AutoCAD: DXF (R12, metres, north up, origin at the middle of the stalls) ----
     tools.querySelector('.tw-lvdxf').addEventListener('click', () => { if (!LVS) return;
