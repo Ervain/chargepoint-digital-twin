@@ -34,6 +34,8 @@
       const map = A.map(); if (!map) return;
       if (map.getZoom() < 15) { hint('Zoom in to the car park first, then press Lane Vision.'); return; }
       const p = A.pin(), ctr = p ? [p.lon, p.lat] : [map.getCenter().lng, map.getCenter().lat];
+      // a new reading starts clean: the last drawing, stalls and badges go
+      LVS = null; badges.forEach(mk => mk.remove()); badges = []; tools.hidden = true; ['lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h'].forEach(id => { const src = map.getSource(id); if (src) src.setData({ type: 'FeatureCollection', features: [] }); });
       btn.disabled = true; hint('Lane Vision is reading the satellite photo…');
       const sw = A.dlg.querySelector('.tw-sweep'); if (sw) { sw.hidden = false; sw.classList.add('is-scan'); }
       try { await detect(map, ctr, p); } catch (e) { hint('Lane Vision could not read the photo here. Try again, or move the pin onto the car park.'); }
@@ -59,68 +61,110 @@
       if (lot && lot.ring) { mg.beginPath(); lot.ring.forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.closePath(); mg.fill(); }
       else if (lot && lot.lines) { mg.lineWidth = 19 / mpp; lot.lines.forEach(l => { mg.beginPath(); l.forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.stroke(); }); }
       else { mg.beginPath(); mg.arc(cx - ph.ox, cy - ph.oy, R, 0, 7); mg.fill(); }
-      // take buildings and main roads out (from the same free map tiles)
+      // take buildings and every road that is not a parking aisle out (from the same free map tiles)
+      const RW = { motorway: 16, trunk: 14, primary: 13, secondary: 11, tertiary: 9, minor: 8, busway: 7, service: 5.5 };
       try { const raw = await A.probe(ctr, 17, m => ({ b: m.querySourceFeatures('openmaptiles', { sourceLayer: 'building' }),
-          r: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => /motorway|trunk|primary|secondary|tertiary|minor/.test(f.properties.class) && f.properties.class !== 'service') }));
+          r: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => { const P = f.properties || {}; return RW[P.class] && P.service !== 'parking_aisle' && !(lot && P.class === 'service'); }) }));
         mg.fillStyle = mg.strokeStyle = '#000';
         raw.b.forEach(f => { const g = f.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []; polys.forEach(pl => { mg.beginPath(); pl[0].forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.closePath(); mg.fill(); }); });
-        mg.lineWidth = 9 / mpp; raw.r.forEach(f => { const g = f.geometry, ls = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []; ls.forEach(l => { mg.beginPath(); l.forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.stroke(); }); });
+        raw.r.forEach(f => { mg.lineWidth = RW[f.properties.class] / mpp; const g = f.geometry, ls = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []; ls.forEach(l => { mg.beginPath(); l.forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.stroke(); }); });
       } catch (e) {}
-      const mask = mg.getImageData(0, 0, w, h).data;
-      // edge strength (Sobel) on brightness: parked cars are busy, lanes are smooth asphalt
-      const gray = new Float32Array(w * h); for (let i = 0; i < w * h; i++) gray[i] = img[i * 4] * 0.3 + img[i * 4 + 1] * 0.59 + img[i * 4 + 2] * 0.11;
-      const G = new Float32Array(w * h), M = new Uint8Array(w * h); let nM = 0;
-      for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (mask[i * 4] < 128) continue;
+      const mask = mg.getImageData(0, 0, w, h).data, WH = w * h;
+      // 1. colour model: asphalt and parked cars stay; grass and trees (green), sand and roof tiles (warm beige) and white roofs go.
+      //    Judged over a 3 m window, so a single white or beige car is never taken out, only whole surfaces.
+      //    The asphalt tint is learnt from this photo (median warmth and brightness inside the footprint), so warm UAE asphalt is not mistaken for sand.
+      const smp = []; for (let i = 0; i < w * h; i += 7) if (mask[i * 4] > 128) smp.push([img[i * 4] - img[i * 4 + 2], img[i * 4] + img[i * 4 + 1] + img[i * 4 + 2]]);
+      const med = k => { const v = smp.map(q => q[k]).sort((x, y) => x - y); return v.length ? v[v.length >> 1] : 0; }, warm0 = med(0), lum0 = med(1);
+      const II = new Uint32Array((w + 1) * (h + 1));
+      for (let y = 0; y < h; y++) { let rs = 0; for (let x = 0; x < w; x++) { const i = (y * w + x) * 4, r = img[i], g = img[i + 1], b = img[i + 2];
+          const bad = (g > r + 8 && g > b + 2) || (r - b > warm0 + 22 && r + g + b > lum0 + 60) || Math.min(r, g, b) > 215 ? 1 : 0; rs += bad; II[(y + 1) * (w + 1) + x + 1] = II[y * (w + 1) + x + 1] + rs; } }
+      const hw = Math.max(2, Math.round(1.5 / mpp)), badAt = (x, y) => { const x0 = Math.max(0, x - hw), x1 = Math.min(w, x + hw), y0 = Math.max(0, y - hw), y1 = Math.min(h, y + hw);
+          return (II[y1 * (w + 1) + x1] - II[y0 * (w + 1) + x1] - II[y1 * (w + 1) + x0] + II[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0)); };
+      // edge strength (Sobel) on brightness: parked cars and bay lines are busy, lanes are smooth asphalt
+      const gray = new Float32Array(WH); for (let i = 0; i < WH; i++) gray[i] = img[i * 4] * 0.3 + img[i * 4 + 1] * 0.59 + img[i * 4 + 2] * 0.11;
+      const G = new Float32Array(WH), M = new Uint8Array(WH); let nM = 0;
+      for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (mask[i * 4] < 128 || badAt(x, y) > 0.55) continue;
         const gx = gray[i - w + 1] + 2 * gray[i + 1] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - 1] - gray[i + w - 1];
         const gy = gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1];
         G[i] = Math.min(255, Math.hypot(gx, gy)); M[i] = 1; nM++; }
       if (nM < 2000) { hint('Lane Vision found no open parking area here. Move the pin onto the car park and try again.'); return; }
-      // the row direction: the angle whose cross-profile shows the strongest banding
-      const bin = 0.5 / mpp, profileAt = (a, step) => { const ca = Math.cos(a), sa = Math.sin(a), D = Math.hypot(w, h), nb = Math.ceil(2 * D / bin) + 2, S2 = new Float64Array(nb), N = new Float64Array(nb);
-          for (let y = 1; y < h - 1; y += step) for (let x = 1; x < w - 1; x += step) { const i = y * w + x; if (!M[i]) continue; const v = -x * sa + y * ca, b = Math.floor((v + D) / bin); S2[b] += G[i]; N[b]++; }
-          return { S2, N, nb, D }; };
-      const contrast = pr => { const vals = []; for (let b = 0; b < pr.nb; b++) if (pr.N[b] > 6) vals.push(pr.S2[b] / pr.N[b]); if (vals.length < 20) return 0;
+      // 2. parking blocks: the paved area split into separate pieces (2 m cells, joined side to side), each read on its own,
+      //    so two car parks at different angles each get their own direction
+      const cs = Math.max(3, Math.round(2 / mpp)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs), cellOn = new Uint8Array(gw * gh), lab = new Int32Array(gw * gh).fill(-1);
+      for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { let n = 0, t = 0; for (let y = gy * cs; y < Math.min(h, gy * cs + cs); y++) for (let x = gx * cs; x < Math.min(w, gx * cs + cs); x++) { t++; n += M[y * w + x]; } cellOn[gy * gw + gx] = n > t * 0.5 ? 1 : 0; }
+      const comps = []; for (let s = 0; s < gw * gh; s++) { if (!cellOn[s] || lab[s] >= 0) continue; const k = comps.length, q = [s]; lab[s] = k; let n = 0, bx0 = 1e9, by0 = 1e9, bx1 = 0, by1 = 0;
+        while (q.length) { const c = q.pop(), cx2 = c % gw, cy2 = (c / gw) | 0; n++; bx0 = Math.min(bx0, cx2); bx1 = Math.max(bx1, cx2); by0 = Math.min(by0, cy2); by1 = Math.max(by1, cy2);
+          [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => { const nx = cx2 + dx, ny = cy2 + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) return; const o = ny * gw + nx; if (cellOn[o] && lab[o] < 0) { lab[o] = k; q.push(o); } }); }
+        comps.push({ k, n, box: [bx0 * cs, by0 * cs, Math.min(w, (bx1 + 1) * cs), Math.min(h, (by1 + 1) * cs)] }); }
+      const inC = (k, x, y) => M[y * w + x] && lab[((y / cs) | 0) * gw + ((x / cs) | 0)] === k;
+      const bin = 0.5 / mpp, out = { rows: [], bays: [], aisles: [] }, runs = []; let spaces = 0, kept = 0; const dbg = window._lvDbg = { nM, warm0, lum0, comps: comps.length, blocks: [] };
+      comps.filter(c => c.n * (cs * mpp) ** 2 >= 220).sort((p, q) => q.n - p.n).slice(0, 12).forEach(cp => {
+        const [X0, Y0, X1, Y1] = cp.box, D = Math.hypot(w, h);
+        // 3. orientation by a Radon-style projection: the angle whose cross-profile of edge strength bands most strongly
+        const profileAt = (a, step) => { const ca = Math.cos(a), sa = Math.sin(a), nb = Math.ceil(2 * D / bin) + 2, S2 = new Float64Array(nb), N = new Float64Array(nb);
+          for (let y = Math.max(1, Y0); y < Math.min(h - 1, Y1); y += step) for (let x = Math.max(1, X0); x < Math.min(w - 1, X1); x += step) { if (!inC(cp.k, x, y)) continue; const i = y * w + x, v = -x * sa + y * ca, b = Math.floor((v + D) / bin); S2[b] += G[i]; N[b]++; }
+          return { S2, N, nb }; };
+        const contrast = pr => { const vals = []; for (let b = 0; b < pr.nb; b++) if (pr.N[b] > 6) vals.push(pr.S2[b] / pr.N[b]); if (vals.length < 14) return 0;
           const sm = vals.map((v, i) => (vals[i - 2] ?? v) * 0.1 + (vals[i - 1] ?? v) * 0.2 + v * 0.4 + (vals[i + 1] ?? v) * 0.2 + (vals[i + 2] ?? v) * 0.1);
           const m = sm.reduce((a, b) => a + b, 0) / sm.length; return Math.sqrt(sm.reduce((a, b) => a + (b - m) ** 2, 0) / sm.length) / (m || 1); };
-      let best = 0, bestA = 0; for (let d = 0; d < 180; d += 3) { const c = contrast(profileAt(d * Math.PI / 180, 3)); if (c > best) { best = c; bestA = d; } }
-      for (let d = bestA - 3; d <= bestA + 3; d++) { const c = contrast(profileAt(d * Math.PI / 180, 2)); if (c > best) { best = c; bestA = d; } }
-      if (best < 0.12) { hint('Lane Vision could not find clear rows of cars here (the photo may show an empty or covered car park). You can still drop the pin and build.'); return; }
-      const a = bestA * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), pr = profileAt(a, 1), nb = pr.nb, D = pr.D;
-      const val = new Float64Array(nb); for (let b = 0; b < nb; b++) val[b] = pr.N[b] > 6 ? pr.S2[b] / pr.N[b] : NaN;
-      const sm = Array.from(val, (v, i) => { let s = 0, n = 0; for (let k = -3; k <= 3; k++) { const q = val[i + k]; if (q === q && q !== undefined) { s += q; n++; } } return n ? s / n : NaN; });
-      const good = sm.filter(v => v === v).sort((p, q) => p - q), T = (good[Math.floor(good.length * 0.3)] + good[Math.floor(good.length * 0.85)]) / 2;
-      // bands above the threshold are parking rows; very wide bands are two rows nose to nose
-      const rows = []; let s0 = -1;
-      for (let b = 0; b <= nb; b++) { const on = b < nb && sm[b] === sm[b] && sm[b] > T; if (on && s0 < 0) s0 = b; if (!on && s0 >= 0) { const wM = (b - s0) * bin * mpp;
-          if (wM >= 3.5 && wM <= 8.5) rows.push([s0, b]); else if (wM > 8.5 && wM <= 14) { const m = Math.round((s0 + b) / 2); rows.push([s0, m], [m, b]); } s0 = -1; } }
-      if (!rows.length) { hint('Lane Vision could not separate the rows here clearly. You can still drop the pin and build.'); return; }
-      // each row measured along its length (where its detail continues), then turned into map shapes
-      const ub = 1 / mpp, out = { rows: [], bays: [], aisles: [] }; let spaces = 0;
-      const toMap = (u, v) => { const x = u * ca - v * sa + ph.ox, y = u * sa + v * ca + ph.oy; return toLL(x, y); };
-      const runs = [];
-      rows.forEach(([b0, b1]) => { const v0 = b0 * bin - D, v1 = b1 * bin - D, nu = Math.ceil(2 * D / ub) + 2, Su = new Float64Array(nu), Nu = new Float64Array(nu);
-        for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (!M[i]) continue; const v = -x * sa + y * ca; if (v < v0 || v > v1) continue; const u = x * ca + y * sa, k = Math.floor((u + D) / ub); Su[k] += G[i]; Nu[k]++; }
-        let r0 = -1, gap = 0; const segs = [];
-        for (let k = 0; k <= nu; k++) { const on = k < nu && Nu[k] > 4 && Su[k] / Nu[k] > T * 0.85;
-          if (on) { if (r0 < 0) r0 = k; gap = 0; } else if (r0 >= 0) { gap++; if (gap * ub * mpp > 5 || k === nu) { const e = k - gap + 1; if ((e - r0) * ub * mpp >= 7.5) segs.push([r0 * ub - D, e * ub - D]); r0 = -1; gap = 0; } } }
-        segs.forEach(([u0, u1]) => { const len = (u1 - u0) * mpp, n = Math.floor(len / BAY); if (n < 2) return; spaces += n;
-          const ring = [toMap(u0, v0), toMap(u1, v0), toMap(u1, v1), toMap(u0, v1), toMap(u0, v0)], bays = [];
-          for (let k = 0; k < n; k++) { const a0 = u0 + k * BAY / mpp, a1 = a0 + BAY / mpp, bb = { ring: [toMap(a0, v0), toMap(a1, v0), toMap(a1, v1), toMap(a0, v1), toMap(a0, v0)], c: toMap((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }; bays.push(bb); out.bays.push(bb); }
-          out.rows.push(ring); runs.push({ v0, v1, u0, u1, ring, bays }); }); });
-      // driving lanes: the smooth gap between two neighbouring rows
-      runs.sort((p, q) => p.v0 - q.v0);
-      for (let k = 0; k < runs.length - 1; k++) { const A1 = runs[k], B1 = runs[k + 1], gapM = (B1.v0 - A1.v1) * mpp;
-        if (gapM >= 3.5 && gapM <= 10) { const u0 = Math.max(A1.u0, B1.u0), u1 = Math.min(A1.u1, B1.u1), v = (A1.v1 + B1.v0) / 2; if ((u1 - u0) * mpp > 6) out.aisles.push([toMap(u0, v), toMap(u1, v)]); } }
-      if (!out.rows.length) { hint('Lane Vision could not measure clear rows here. You can still drop the pin and build.'); return; }
-      // pin on the row closest to the pin, canopies along the rows
-      const [pcx, pcy] = [cx - ph.ox, cy - ph.oy], pv = -pcx * sa + pcy * ca, pu = pcx * ca + pcy * sa;
-      let nearest = runs[0], nd = 1e9; runs.forEach(r => { const vm = (r.v0 + r.v1) / 2, um = Math.max(r.u0, Math.min(r.u1, pu)), d = Math.hypot(vm - pv, um - pu); if (d < nd) { nd = d; nearest = r; } });
-      const um = Math.max(nearest.u0, Math.min(nearest.u1, pu)), [plon, plat] = toMap(um, (nearest.v0 + nearest.v1) / 2);
-      const rot = Math.round(((-bestA) % 180 + 180) % 180), name = (p && p.lot && p.lot.label) || (p && p.name) || 'Car park';
+        let best = 0, bestA = 0; for (let d = 0; d < 180; d += 3) { const c = contrast(profileAt(d * Math.PI / 180, 3)); if (c > best) { best = c; bestA = d; } }
+        for (let d = bestA - 3; d <= bestA + 3; d++) { const c = contrast(profileAt(d * Math.PI / 180, 2)); if (c > best) { best = c; bestA = d; } }
+        const db = { n: cp.n, best: +best.toFixed(3), ang: bestA, rows: 0, segs: 0, pk: [] }; dbg.blocks.push(db); if (best < 0.12) return;
+        const a = bestA * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), pr = profileAt(a, 1), nb = pr.nb;
+        const val = new Float64Array(nb); for (let b = 0; b < nb; b++) val[b] = pr.N[b] > 6 ? pr.S2[b] / pr.N[b] : NaN;
+        const sm = Array.from(val, (v, i) => { let s = 0, n = 0; for (let k = -3; k <= 3; k++) { const q = val[i + k]; if (q === q && q !== undefined) { s += q; n++; } } return n ? s / n : NaN; });
+        const good = sm.filter(v => v === v).sort((p, q) => p - q); if (good.length < 10) return;
+        const T = (good[Math.floor(good.length * 0.3)] + good[Math.floor(good.length * 0.85)]) / 2;
+        const rows = []; let s0 = -1;
+        for (let b = 0; b <= nb; b++) { const on = b < nb && sm[b] === sm[b] && sm[b] > T; if (on && s0 < 0) s0 = b; if (!on && s0 >= 0) { const wM = (b - s0) * bin * mpp;
+            if (wM >= 3.5 && wM <= 8.5) rows.push([s0, b]); else if (wM > 9 && wM <= 14) { const m = Math.round((s0 + b) / 2); rows.push([s0, m], [m, b]); } s0 = -1; } }
+        db.rows = rows.length;
+        const toMap = (u, v) => { const x = u * ca - v * sa + ph.ox, y = u * sa + v * ca + ph.oy; return toLL(x, y); };
+        const inside = (u, v) => { const x = Math.round(u * ca - v * sa), y = Math.round(u * sa + v * ca); return x > 0 && y > 0 && x < w - 1 && y < h - 1 && inC(cp.k, x, y); };
+        const cRuns = [];
+        rows.forEach(([b0, b1]) => { const v0 = b0 * bin - D, v1 = b1 * bin - D, q = 0.25 / mpp, nu = Math.ceil(2 * D / q) + 2, Su = new Float64Array(nu), Nu = new Float64Array(nu);
+          for (let y = Math.max(1, Y0); y < Math.min(h - 1, Y1); y++) for (let x = Math.max(1, X0); x < Math.min(w - 1, X1); x++) { if (!inC(cp.k, x, y)) continue; const v = -x * sa + y * ca; if (v < v0 || v > v1) continue; const u = x * ca + y * sa, k = Math.floor((u + D) / q); Su[k] += G[y * w + x]; Nu[k]++; }
+          // where the row continues: busy, covered stretches at least 7.5 m long, gaps over 4 m end a stretch
+          const per = Array.from(Su, (s, k) => Nu[k] > 2 ? s / Nu[k] : 0), m4 = Math.round(1 / 0.25);
+          let r0 = -1, gap = 0; const segs = [];
+          for (let k = 0; k <= nu; k += 1) { let s = 0, n = 0; for (let j = k; j < Math.min(nu, k + m4); j++) if (Nu[j] > 2) { s += per[j]; n++; } const on = k < nu && n >= m4 / 2 && s / n > T * 0.85;
+            if (on) { if (r0 < 0) r0 = k; gap = 0; } else if (r0 >= 0) { gap++; if (gap * 0.25 > 4 || k === nu) { const e = k - gap + 1; if ((e - r0) * 0.25 >= 7.5) segs.push([r0, e]); r0 = -1; gap = 0; } } }
+          segs.forEach(([k0, k1]) => {
+            // 4. the rhythm of real bays: autocorrelation of the edge profile along the row must peak at a bay width (2.2 to 3.1 m).
+            //    Roads, roofs and sand have no such beat. The peak also gives this car park's own bay width.
+            const P = per.slice(k0, k1), Z = P.map((x, i) => { let s = 0, n = 0; for (let j = Math.max(0, i - 10); j <= Math.min(P.length - 1, i + 10); j++) { s += P[j]; n++; } return x - s / n; }), E = Z.reduce((x, y) => x + y * y, 0) || 1;   // detrended over 5 m
+            let pk = 0, lag = 10; for (let L = 9; L <= 12; L++) { let s = 0; for (let i = 0; i + L < Z.length; i++) s += Z[i] * Z[i + L]; s /= E * (Z.length - L) / Z.length; if (s > pk) { pk = s; lag = L; } }
+            db.segs++; db.pk.push(+pk.toFixed(2));
+            // inside a mapped car park a clear row is trusted even when the beat is weak (empty or full rows); elsewhere the beat is required
+            if (pk < 0.07) { if (!(lot && best >= 0.2)) return; lag = 10; }
+            const bayM = lag * 0.25, bp = bayM / mpp;
+            // phase: start the bays on the painted lines (the strongest edges at the bay rhythm)
+            let ph0 = 0, phs = -1; for (let o = 0; o < lag; o++) { let s = 0; for (let i = o; i < P.length; i += lag) s += P[i]; if (s > phs) { phs = s; ph0 = o; } }
+            const uStart = (k0 + ph0) * q - D, n = Math.floor(((k1 - k0 - ph0) * 0.25) / bayM);
+            // 5. every bay checked on its own: at least 55% of it must be paved car park, else it is dropped
+            const ok = []; for (let j = 0; j < n; j++) { const a0 = uStart + j * bp, a1 = a0 + bp; let t = 0, gd = 0;
+              for (let su = 0.15; su < 1; su += 0.23) for (let sv = 0.12; sv < 1; sv += 0.19) { t++; if (inside(a0 + su * (a1 - a0), v0 + sv * (v1 - v0))) gd++; } ok.push(gd / t >= 0.55); }
+            let j = 0; while (j < n) { if (!ok[j]) { j++; continue; } let e = j; while (e + 1 < n && ok[e + 1]) e++; const cnt = e - j + 1;
+              if (cnt >= 3) { const u0 = uStart + j * bp, u1 = uStart + (e + 1) * bp, bays = [];
+                for (let t = j; t <= e; t++) { const a0 = uStart + t * bp, a1 = a0 + bp, bb = { ring: [toMap(a0, v0), toMap(a1, v0), toMap(a1, v1), toMap(a0, v1), toMap(a0, v0)], c: toMap((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }; bays.push(bb); out.bays.push(bb); }
+                const ring = [toMap(u0, v0), toMap(u1, v0), toMap(u1, v1), toMap(u0, v1), toMap(u0, v0)]; out.rows.push(ring); spaces += cnt;
+                const run = { v0, v1, u0, u1, ring, bays, comp: cp.k, rot: Math.round(((-bestA) % 180 + 180) % 180), bayM, toMap }; runs.push(run); cRuns.push(run); }
+              j = e + 1; } }); });
+        // driving lanes: the smooth gap between two neighbouring rows of this block
+        cRuns.sort((p, q2) => p.v0 - q2.v0);
+        for (let k = 0; k < cRuns.length - 1; k++) { const A1 = cRuns[k], B1 = cRuns[k + 1], gapM = (B1.v0 - A1.v1) * mpp;
+          if (gapM >= 3.5 && gapM <= 10) { const u0 = Math.max(A1.u0, B1.u0), u1 = Math.min(A1.u1, B1.u1), v = (A1.v1 + B1.v0) / 2; if ((u1 - u0) * mpp > 6) out.aisles.push([toMap(u0, v), toMap(u1, v)]); } }
+        if (cRuns.length) kept++; });
+      if (!out.rows.length) { hint('Lane Vision found no rows with the regular rhythm of parking bays here (the photo may show an empty, covered or unmarked area). You can still drop the pin and build.'); return; }
+      // pin on the row closest to the pin, canopies along that row
+      const kx = 111320 * Math.cos(ctr[1] * Math.PI / 180), dist = (q2) => Math.hypot((q2[0] - ctr[0]) * kx, (q2[1] - ctr[1]) * 110540);
+      let nearest = runs[0], nb2 = null, nd = 1e9; runs.forEach(r => r.bays.forEach(b => { const d = dist(b.c); if (d < nd) { nd = d; nearest = r; nb2 = b; } }));
+      const [plon, plat] = nb2.c, rot = nearest.rot, name = (p && p.lot && p.lot.label) || (p && p.name) || 'Car park';
       A.setPin(plat, plon, (p && p.name) || null, { rot, lot: { label: name, kind: 'Surface', rows: out.rows, ring: null, lines: null, rot,
         capText: `about ${spaces.toLocaleString('en-US')} spaces in ${out.rows.length} rows, read from the satellite photo` } });
-      LVS = { map, out, runs, nearest, pu: um, edited: false, bayPx: BAY / mpp }; hookMap(map); tools.hidden = false; draw(map, out);
-      hint(`Lane Vision: ${out.rows.length} parking rows, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces, read from the satellite photo. Check it against the photo, then build.`);
+      LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp }; hookMap(map); tools.hidden = false; draw(map, out);
+      const bw = nearest.bayM.toFixed(2);
+      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays measured ${bw} m wide). Rows were kept only where the photo shows the regular rhythm of parking bays.`);
     }
 
     // ---- drawing, in the style of a site design: every bay a white rectangle, the charging bays green with a badge, lanes dashed ----
@@ -152,7 +196,7 @@
     let quiet = false;
     function autoEV() { if (!LVS) return; const n = Math.max(1, Math.min(40, parseInt($('.tw-spots').value, 10) || 8)), k = kindNow();
       LVS.runs.forEach(r => r.bays.forEach(b => { b.ev = null; }));
-      const near = LVS.nearest, order = LVS.runs.slice().sort((p, q) => Math.abs((p.v0 + p.v1) / 2 - (near.v0 + near.v1) / 2) - Math.abs((q.v0 + q.v1) / 2 - (near.v0 + near.v1) / 2));
+      const near = LVS.nearest, order = LVS.runs.slice().sort((p, q) => (p.comp !== near.comp) - (q.comp !== near.comp) || Math.abs((p.v0 + p.v1) / 2 - (near.v0 + near.v1) / 2) - Math.abs((q.v0 + q.v1) / 2 - (near.v0 + near.v1) / 2));
       let left = n; order.forEach(r => { if (left <= 0) return; r.bays.slice().sort((p, q) => Math.abs(p.u - LVS.pu) - Math.abs(q.u - LVS.pu)).slice(0, left).forEach(b => { b.ev = k; left--; }); });
       paint(); }
     function markEV() { if (LVS && !LVS.edited) autoEV(); else paint(); }
@@ -208,7 +252,7 @@
     // the row across the nearest lane (or the next row) on a given side
     // the nearest row on one side that has bays facing the whole group (rows may be cut into pieces by trees or islands)
     const rowBeside = (r, side, grp) => { const vm = (r.v0 + r.v1) / 2, g0 = Math.min(...grp.map(b => b.u)), g1 = Math.max(...grp.map(b => b.u)); let best = null, bs = -1e9;
-      LVS.runs.forEach(q => { if (q === r) return; const d = ((q.v0 + q.v1) / 2 - vm) * side; if (d <= 0) return;
+      LVS.runs.forEach(q => { if (q === r || q.comp !== r.comp) return; const d = ((q.v0 + q.v1) / 2 - vm) * side; if (d <= 0) return;
         const cover = grp.filter(b => q.bays.some(c => Math.abs(c.u - b.u) < LVS.bayPx * 0.6)).length, sc = cover * 1000 - d; if (cover && sc > bs) { bs = sc; best = q; } });
       return best && (best.v0 + best.v1) / 2 - vm ? best : null; };
     const copyTo = (grp, q, kind) => { let n = 0; grp.forEach(b => { let t = null, td = 1e9; q.bays.forEach(c => { const d = Math.abs(c.u - b.u); if (d < td) { td = d; t = c; } }); if (t && td < LVS.bayPx * 0.6) { t.ev = kind || b.ev; n++; } }); return n; };
