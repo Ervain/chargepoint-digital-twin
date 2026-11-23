@@ -2654,6 +2654,7 @@ SITE.root.visible = false; scene.add(SITE.root);
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'tw-sitebtn'; btn.innerHTML = pinSvg + '<span>Place on a site</span>'; stageEl.appendChild(btn);
   const dlg = document.createElement('div'); dlg.className = 'tw-map'; dlg.hidden = true; dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-label', 'Choose a site');
   dlg.innerHTML = '<div class="tw-map-head"><form class="tw-map-search" role="search"><input type="search" placeholder="Search a place, e.g. Al Wahda Mall, Abu Dhabi" aria-label="Search a place" autocomplete="off"><button type="submit">Search</button></form>'
+    + '<button type="button" class="tw-pk" title="Find and highlight the parking areas in the map view">Find parking</button>'
     + '<div class="tw-map-seg" role="group" aria-label="Map type"><button type="button" data-ms="sat" aria-pressed="true">Satellite</button><button type="button" data-ms="map" aria-pressed="false">Map</button></div>'
     + '<button class="tw-close" type="button" aria-label="Close the map">×</button></div>'
     + '<div class="tw-map-view"><div class="tw-map-results" hidden></div><div class="tw-map-blocked" hidden></div></div>'
@@ -2666,6 +2667,7 @@ SITE.root.visible = false; scene.add(SITE.root);
   bar.innerHTML = '<p class="tw-sb-sub" aria-live="polite"></p>'
     + '<label class="tw-sb-row"><span>Turn</span><input type="range" min="0" max="359" value="0" class="tw-rot" aria-label="Turn the canopies"><output class="tw-rotv">0°</output></label>'
     + '<div class="tw-sb-btns"><button type="button" class="tw-sat" aria-pressed="true">Satellite ground</button><button type="button" class="tw-edit">Change site</button><button type="button" class="tw-leave">Leave site</button></div>'
+    + '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-prop">Create proposal</button></div>'
     + '<p class="tw-sb-credit">Map data © OpenStreetMap contributors · Imagery © Esri, Maxar, Earthstar Geographics</p>';
   stageEl.appendChild(bar);
   const $d = s => dlg.querySelector(s), $b = s => bar.querySelector(s);
@@ -2692,12 +2694,16 @@ SITE.root.visible = false; scene.add(SITE.root);
     if (!map) {
       map = new maplibregl.Map({ container: $d('.tw-map-view'), style: SAT, center: pin ? [pin.lon, pin.lat] : [54.3725, 24.4706], zoom: pin ? 18 : 15, maxZoom: 19, attributionControl: { compact: true } });
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-      map.on('click', e => { $d('.tw-map-results').hidden = true; setPin(e.lngLat.lat, e.lngLat.lng, null); });
+      map.on('click', e => { $d('.tw-map-results').hidden = true;
+        const hit = map.getLayer('pk-fill') ? map.queryRenderedFeatures(e.point, { layers: ['pk-fill', 'pk-pt'].filter(l => map.getLayer(l)) })[0] : null;
+        if (hit) pickParking(hit.properties.i); else setPin(e.lngLat.lat, e.lngLat.lng, null); });
+      map.on('style.load', () => { if (PK.fc) showParking(PK.fc, PK.sel); });
+      map.on('mousemove', e => { if (!map.getLayer('pk-fill')) return; map.getCanvas().style.cursor = map.queryRenderedFeatures(e.point, { layers: ['pk-fill', 'pk-pt'].filter(l => map.getLayer(l)) }).length ? 'pointer' : ''; });
       let tileErr = 0; map.on('error', () => { if (++tileErr === 6) hint('Some map images are not loading. Try the Map button above, or zoom a little.'); });
     } else setTimeout(() => map.resize(), 0);
   }
-  function setPin(lat, lon, name) {
-    pin = { lat, lon, name };
+  function setPin(lat, lon, name, extra) {
+    pin = Object.assign({ lat, lon, name }, extra || {});
     if (!marker) marker = new maplibregl.Marker({ color: '#3BA9E0' }); marker.setLngLat([lon, lat]).addTo(map);
     $d('.tw-build').disabled = false; hint(name ? `${name}: click the map to fine-tune the spot, then build.` : 'Pin dropped. Set the parking spots and build.');
   }
@@ -2711,7 +2717,7 @@ SITE.root.visible = false; scene.add(SITE.root);
     const r2 = await withTimeout('https://photon.komoot.io/api/?limit=5&q=' + encodeURIComponent(q), 8000); const j2 = await r2.json();
     return (j2.features || []).map(f => { const p = f.properties || {}; return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: p.name || p.street || q, where: [p.city || p.district, p.country].filter(Boolean).join(', ') }; });
   }
-  function choose(m) { $d('.tw-map-results').hidden = true; map.flyTo({ center: [m.lon, m.lat], zoom: 18, speed: 1.6 }); setPin(m.lat, m.lon, m.name); }
+  function choose(m) { $d('.tw-map-results').hidden = true; map.flyTo({ center: [m.lon, m.lat], zoom: 18, speed: 1.6 }); setPin(m.lat, m.lon, m.name, { full: [m.name, m.where].filter(Boolean).join(', ') }); }
   $d('form').addEventListener('submit', async e => { e.preventDefault(); const q = $d('input[type=search]').value.trim(); if (!q) return;
     if (!map) await openMap(); if (!map) return; hint('Searching…'); const list = $d('.tw-map-results'); list.hidden = true; list.innerHTML = '';
     let res; try { res = await geocode(q); } catch (err) { hint('Search is not available right now. You can still move the map and click to drop the pin.'); return; }
@@ -2721,6 +2727,102 @@ SITE.root.visible = false; scene.add(SITE.root);
         const n = document.createElement('b'), w = document.createElement('span'); n.textContent = m.name; w.textContent = m.where; b.append(n, w); if (!i) b.setAttribute('aria-current', 'true');
         b.addEventListener('click', () => { list.querySelectorAll('button').forEach(x => x.removeAttribute('aria-current')); b.setAttribute('aria-current', 'true'); choose(m); list.hidden = false; }); list.appendChild(b); });
       const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-map-res-x'; x.textContent = 'Hide matches'; x.addEventListener('click', () => { list.hidden = true; }); list.appendChild(x); list.hidden = false; } });
+
+  // ---- parking finder: every car park in the map view is outlined; pick one and the pin, name and canopy direction follow it ----
+  const PK = { fc: null, list: [], sel: -1 };
+  const polyArea = pts => { let a = 0; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1]); return Math.abs(a / 2); };
+  function lotInfo(ring, tags, i) {   // ring: [[lon, lat], ...]
+    const lat0 = ring.reduce((a, p) => a + p[1], 0) / ring.length, lon0 = ring.reduce((a, p) => a + p[0], 0) / ring.length, k = mLon(lat0);
+    const xy = ring.map(([lo, la]) => [(lo - lon0) * k, -(la - lat0) * M_LAT]);
+    let best = 0, ang = 0; for (let j = 0; j < xy.length - 1; j++) { const dx = xy[j + 1][0] - xy[j][0], dz = xy[j + 1][1] - xy[j][1], L = Math.hypot(dx, dz); if (L > best) { best = L; ang = Math.atan2(dz, dx); } }
+    const area = polyArea(xy), kind = tags.parking === 'multi-storey' ? 'Multi-storey' : tags.parking === 'underground' ? 'Underground' : tags.parking === 'rooftop' ? 'Rooftop' : 'Surface';
+    const cap = parseInt(tags.capacity, 10), est = Math.round(area / 25);
+    const capText = cap > 0 ? `${cap.toLocaleString('en-US')} spaces (mapped)` : est > 0 ? `about ${est.toLocaleString('en-US')} spaces, estimated from ${Math.round(area).toLocaleString('en-US')} m²` : 'size not mapped';
+    let rot = Math.round(((-ang * 180 / Math.PI) % 180 + 180) % 180);
+    return { i, lat: lat0, lon: lon0, area, kind, capText, rot, ring, name: tags.name || '', label: tags.name || `${kind} car park` };
+  }
+  // off-screen map on the OpenFreeMap tiles (fast CDN), used to read car parks and their aisles
+  function probe(center, zoom, read) { return new Promise((res, rej) => {
+    const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:1000px;height:800px;visibility:hidden;pointer-events:none'; document.body.appendChild(box);
+    let m; const done = (v, e) => { clearTimeout(t); try { m && m.remove(); } catch (x) {} box.remove(); e ? rej(e) : res(v); };
+    const t = setTimeout(() => done(null, new Error('tiles timeout')), 20000);
+    try { m = new maplibregl.Map({ container: box, style: STREETS, center, zoom, interactive: false, attributionControl: false, fadeDuration: 0 }); } catch (e) { done(null, e); return; }
+    m.once('idle', () => { try { done(read(m)); } catch (e) { done(null, e); } }); }); }
+  const hull = pts => { pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (pts.length < 3) return null;
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+    for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+    for (const p of pts.slice().reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+    const h = lo.slice(0, -1).concat(up.slice(0, -1)); return h.length >= 3 ? h : null; };
+  // car parks from the tiles: named parking points, with an outline and a direction taken from the parking aisles around each one
+  async function parkingFromTiles(bounds) {
+    const c = map.getCenter(), raw = await probe([c.lng, c.lat], Math.max(15.5, map.getZoom()), m => ({
+      pts: m.querySourceFeatures('openmaptiles', { sourceLayer: 'poi' }).filter(f => f.properties.class === 'parking' && !/bicycle|motorcycle/.test(f.properties.subclass || '') && f.geometry.type === 'Point'),
+      aisles: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => f.properties.service === 'parking_aisle') }));
+    const inView = ([lo, la]) => lo >= bounds.getWest() && lo <= bounds.getEast() && la >= bounds.getSouth() && la <= bounds.getNorth();
+    const segs = []; raw.aisles.forEach(f => { const L = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+      L.forEach(l => { for (let k = 0; k < l.length - 1; k++) segs.push([l[k], l[k + 1]]); }); });
+    const seen = new Set(), out = [];
+    for (const f of raw.pts) { const [lo, la] = f.geometry.coordinates; if (!inView([lo, la])) continue; const key = (f.properties.name || '') + '|' + lo.toFixed(4) + la.toFixed(4); if (seen.has(key)) continue; seen.add(key);
+      const k = mLon(la), near = segs.filter(([a, b]) => Math.hypot(((a[0] + b[0]) / 2 - lo) * k, ((a[1] + b[1]) / 2 - la) * M_LAT) < 90);
+      let sx = 0, sz = 0; const pts = []; near.forEach(([a, b]) => { const dx = (b[0] - a[0]) * k, dz = -(b[1] - a[1]) * M_LAT, L = Math.hypot(dx, dz), th = Math.atan2(dz, dx); sx += Math.cos(2 * th) * L; sz += Math.sin(2 * th) * L; pts.push(a, b); });
+      const ring = hull(pts); const tags = { name: f.properties.name || '' };
+      const l = ring ? lotInfo(ring.concat([ring[0]]), tags, 0) : { lat: la, lon: lo, area: 0, kind: 'Surface', capText: 'size not mapped', ring: null, name: tags.name, label: tags.name || 'Car park' };
+      if (near.length) l.rot = Math.round(((-Math.atan2(sz, sx) / 2 * 180 / Math.PI) % 180 + 180) % 180);
+      if (ring) l.capText = `about ${Math.round(l.area / 25).toLocaleString('en-US')} spaces, estimated from the aisle layout`;
+      l.lat = la; l.lon = lo; out.push(l); }
+    return out;
+  }
+  async function parkingFromOverpass(bb) {
+    const q = `[out:json][timeout:15];(way["amenity"="parking"](${bb});relation["amenity"="parking"](${bb}););out geom tags;`;
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 14000);
+    const ask = u => fetch(u + '?data=' + encodeURIComponent(q), { signal: ctl.signal }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    try { const j = await Promise.any(['https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'].map(ask)); const lots = [];
+      for (const el of j.elements) { const tg = el.tags || {}; if (tg.parking === 'underground') continue;
+        if (el.type === 'way' && el.geometry && el.geometry.length > 3) lots.push(lotInfo(el.geometry.map(g => [g.lon, g.lat]), tg, 0));
+        else if (el.type === 'relation') (el.members || []).filter(m => m.role === 'outer' && m.geometry && m.geometry.length > 3).forEach(m => lots.push(lotInfo(m.geometry.map(g => [g.lon, g.lat]), tg, 0))); }
+      return lots; } finally { clearTimeout(timer); ctl.abort(); }
+  }
+  function listParking(lots, source) {
+    const list = $d('.tw-map-results');
+    PK.list = lots.sort((a, c) => (c.area || 0) - (a.area || 0)).slice(0, 30).map((l, i) => Object.assign(l, { i }));
+    showParking({ type: 'FeatureCollection', features: PK.list.map(l => ({ type: 'Feature', properties: { i: l.i }, geometry: l.ring ? { type: 'Polygon', coordinates: [l.ring] } : { type: 'Point', coordinates: [l.lon, l.lat] } })) }, -1);
+    list.innerHTML = ''; const h = document.createElement('p'); h.className = 'tw-map-res-h'; h.textContent = `${PK.list.length} parking area${PK.list.length > 1 ? 's' : ''} in view, largest first`; list.appendChild(h);
+    PK.list.forEach(l => { const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'tw-map-res'; const n = document.createElement('b'), w = document.createElement('span');
+      n.textContent = l.label; w.textContent = `${l.kind} · ${l.capText}`; bt.append(n, w); bt.addEventListener('click', () => pickParking(l.i)); list.appendChild(bt); });
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-map-res-x'; x.textContent = 'Hide list'; x.addEventListener('click', () => { list.hidden = true; }); list.appendChild(x);
+    list.hidden = false; hint(`Parking areas are outlined in green${source === 'osm' ? ' (exact outlines)' : ''}. Pick one from the list or click it on the map.`);
+  }
+  async function findParking() {
+    if (!map) return; const btnP = $d('.tw-pk');
+    if (map.getZoom() < 14.5) { hint('Zoom in closer first (a district or a mall), then press Find parking.'); return; }
+    const b = map.getBounds(), bb = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(v => v.toFixed(5)).join(',');
+    hint('Looking for parking areas in this view…'); btnP.disabled = true; const run = (PK.run = (PK.run || 0) + 1);
+    const osm = parkingFromOverpass(bb).catch(() => null);
+    let fast = null; try { fast = await parkingFromTiles(b); } catch (e) {}
+    if (run !== PK.run) return;
+    if (fast && fast.length) listParking(fast, 'tiles');
+    const exact = await osm; btnP.disabled = false; if (run !== PK.run) return;
+    if (exact && exact.length && (!fast || exact.length >= Math.min(3, fast.length)) && PK.sel < 0) listParking(exact, 'osm');
+    else if (!(fast && fast.length)) { if (exact && exact.length) listParking(exact, 'osm');
+      else { hint('No parking areas are mapped in this view. Move the map or zoom out a little, or click to drop the pin.'); showParking({ type: 'FeatureCollection', features: [] }, -1); } }
+  }
+  function showParking(fc, sel) { PK.fc = fc; PK.sel = sel;
+    const add = () => { if (!map.getSource('pk')) { map.addSource('pk', { type: 'geojson', data: fc });
+        map.addLayer({ id: 'pk-fill', type: 'fill', source: 'pk', paint: { 'fill-color': '#3BA9E0', 'fill-opacity': 0.25 } });
+        map.addLayer({ id: 'pk-line', type: 'line', source: 'pk', paint: { 'line-color': '#8DC63F', 'line-width': 2.5 } });
+        map.addLayer({ id: 'pk-sel', type: 'line', source: 'pk', paint: { 'line-color': '#ffffff', 'line-width': 4 }, filter: ['==', ['get', 'i'], -1] });
+        map.addLayer({ id: 'pk-pt', type: 'circle', source: 'pk', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 9, 'circle-color': '#3BA9E0', 'circle-stroke-color': '#8DC63F', 'circle-stroke-width': 3 } }); }
+      else map.getSource('pk').setData(fc);
+      map.setFilter('pk-sel', ['all', ['==', ['get', 'i'], sel], ['!=', ['geometry-type'], 'Point']]); };
+    if (map.isStyleLoaded()) add(); else map.once('idle', add); }
+  function pickParking(i) { const l = PK.list[i]; if (!l) return;
+    if (l.ring) { const lo = l.ring.map(p => p[0]), la = l.ring.map(p => p[1]); map.fitBounds([[Math.min(...lo), Math.min(...la)], [Math.max(...lo), Math.max(...la)]], { padding: 70, maxZoom: 19, duration: 900 }); }
+    else map.flyTo({ center: [l.lon, l.lat], zoom: 18.5, duration: 900 });
+    showParking(PK.fc, i); PK.sel = i;
+    $d('.tw-map-results').querySelectorAll('.tw-map-res').forEach((b, k) => b.toggleAttribute('aria-current', k === i));
+    setPin(l.lat, l.lon, l.name || null, { rot: l.rot, lot: l });
+    hint(`${l.label}: ${l.capText}.${l.rot !== undefined ? ' The canopies will line up with this car park.' : ''} Set the spots and build.`); }
+  $d('.tw-pk').addEventListener('click', findParking);
   $d('.tw-close').addEventListener('click', () => { dlg.hidden = true; btn.focus(); });
   btn.addEventListener('click', openMap);
   $b('.tw-edit').addEventListener('click', openMap);
@@ -2738,7 +2840,8 @@ SITE.root.visible = false; scene.add(SITE.root);
   const roadM = new T.MeshStandardMaterial({ color: 0x3a3f46, roughness: 0.95, metalness: 0 });
   const slabF = new T.MeshStandardMaterial({ color: 0x1b1f26, roughness: 0.9, metalness: 0 }), lineF = new T.MeshStandardMaterial({ color: 0x3a4655, roughness: 0.8, metalness: 0 }), carF = new T.MeshStandardMaterial({ color: 0xa3a9b0, roughness: 0.5, metalness: 0.05 });
   const outerM = new T.MeshStandardMaterial({ color: 0xcdbfa6, roughness: 1, metalness: 0 });
-  const groundM = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 }), groundM2 = groundM.clone();
+  const groundM = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 }), groundM2 = groundM.clone(), groundM3 = groundM.clone();
+  const MATS = { ground: groundM, ground2: groundM2, ground3: groundM3 };
   const outer = new T.Mesh(new T.PlaneGeometry(4000, 4000), outerM); outer.rotation.x = -Math.PI / 2; outer.position.y = -0.03; outer.receiveShadow = true; SITE.root.add(outer);
 
   // ---- the product: the parking spots become a mix of Halo 4 / Halo 2 / Halo 1 (or Halo 4 Ray), in rows that sit back to back ----
@@ -2781,7 +2884,7 @@ SITE.root.visible = false; scene.add(SITE.root);
     if (token !== SITE.token) return;
     const [ax, az] = toXZ(tileLat(y0, z), tileLon(x0, z)), [bx, bz] = toXZ(tileLat(y0 + N, z), tileLon(x0 + N, z));
     const t = new T.CanvasTexture(cv); t.encoding = T.sRGBEncoding; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    const mat = slot === 'ground' ? groundM : groundM2;
+    const mat = MATS[slot];
     if (SITE[slot]) { SITE.root.remove(SITE[slot]); SITE[slot].geometry.dispose(); }
     if (mat.userData.tex) mat.userData.tex.dispose(); mat.userData.tex = t;
     const m = new T.Mesh(new T.PlaneGeometry(bx - ax, bz - az), mat); m.rotation.x = -Math.PI / 2; m.position.set((ax + bx) / 2, y, (az + bz) / 2); m.receiveShadow = true;
@@ -2842,9 +2945,9 @@ SITE.root.visible = false; scene.add(SITE.root);
     bldM.color.set(f ? 0x151920 : 0xece8e1); bldEdge.color.set(f ? 0x62758e : 0xa39d92); bldEdge.opacity = f ? 0.9 : 0.7;
     roadM.color.set(f ? 0x1c2129 : 0x4a4f57);
     const useSat = SITE.sat && !f && groundM.userData.tex;
-    for (const gm of [groundM, groundM2]) { const tex = gm.userData.tex || null, want = useSat ? tex : null;
+    for (const gm of Object.values(MATS)) { const tex = gm.userData.tex || null, want = useSat ? tex : null;
       if (gm.map !== want) { gm.map = want; gm.needsUpdate = true; } gm.color.set(useSat ? 0xffffff : f ? 0x0e1115 : 0xd8d2c6); }
-    if (SITE.ground2) SITE.ground2.visible = !!useSat; outerM.color.set(f ? 0x0b0d11 : 0xcdbfa6);
+    if (SITE.ground2) SITE.ground2.visible = !!useSat; if (SITE.ground3) SITE.ground3.visible = !!useSat && SITE.hd; outerM.color.set(f ? 0x0b0d11 : 0xcdbfa6);
     SITE.roads.forEach(m => { m.visible = !useSat; });
     if (SITE.product) SITE.product.traverse(o => { if (!o.isMesh) return; if (o.userData.fsdGlow) { o.visible = f; return; } const orig = o.userData.siteOrig || o.material; let want = orig;
       if (f) { if (o.userData.siteCar) want = carF; else if (orig === M.slab) want = slabF; else if (orig === M.paint || (orig === M.white && o.geometry.type === 'PlaneGeometry')) want = lineF; }
@@ -2852,17 +2955,28 @@ SITE.root.visible = false; scene.add(SITE.root);
     $b('.tw-sat').setAttribute('aria-pressed', SITE.sat);
     if (typeof draw === 'function') draw();
   }
+
+  // the chosen car park, outlined on the ground in the brand colours
+  const lotM = new T.LineBasicMaterial({ color: 0x8DC63F, transparent: true, opacity: 0.95 });
+  function drawLot() { if (SITE.lotLine) { SITE.root.remove(SITE.lotLine); SITE.lotLine.geometry.dispose(); SITE.lotLine = null; } if (!SITE.lot || !SITE.lot.ring) return;
+    const pts = SITE.lot.ring.map(([lo, la]) => { const [x, z] = toXZ(la, lo); return new T.Vector3(x, 0.06, z); });
+    const ln = new T.Line(new T.BufferGeometry().setFromPoints(pts), lotM); ln.raycast = () => {}; SITE.root.add(ln); SITE.lotLine = ln; }
   // ---- enter, build, leave ----
   let maxD0 = controls.maxDistance;
   function hideStudio() { Object.values(groups).forEach(g => { g.visible = false; }); ENV.villaGroup.visible = false; ground.visible = false; if (ENV.carport) ENV.carport.visible = false; }
   async function build() {
     SITE.spots = Math.max(1, Math.min(40, parseInt($d('.tw-spots').value, 10) || 8)); $d('.tw-spots').value = SITE.spots;
     SITE.kind = $d('.tw-kind').value; SITE.lat = pin.lat; SITE.lon = pin.lon; SITE.name = pin.name || 'Chosen site'; SITE.token = (SITE.token || 0) + 1; const token = SITE.token;
+    if (SITE.hd) setHD(false); if (SITE.ground3) { SITE.root.remove(SITE.ground3); SITE.ground3.geometry.dispose(); SITE.ground3 = null; }
+    SITE.place = pin.full || ''; SITE.lot = pin.lot || null; if (pin.rot !== undefined) { SITE.rot = pin.rot; $b('.tw-rot').value = SITE.rot; $b('.tw-rotv').textContent = SITE.rot + '°'; }
+    drawLot();
     dlg.hidden = true; SITE.on = true; SITE.root.visible = true; bar.hidden = false; btn.hidden = true; stageEl.classList.add('is-site');
     hideStudio(); applyEnv(); placeProduct(); frameSite(); setTitle(); controls.maxDistance = 420;
     say('Loading the real buildings and the satellite ground…');
-    if (!pin.name) fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${pin.lat}&lon=${pin.lon}`).then(r => r.json()).then(j => { if (token !== SITE.token || !j) return; const a = j.address || {};
-      SITE.name = j.name || [a.road, a.suburb || a.city_district, a.city || a.town].filter(Boolean).slice(0, 2).join(', ') || SITE.name; setTitle(); }).catch(() => {});
+    SITE.area = ''; const named = !!pin.name;
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${pin.lat}&lon=${pin.lon}`).then(r => r.json()).then(j => { if (token !== SITE.token || !j) return; const a = j.address || {};
+      SITE.area = [a.suburb || a.city_district || a.neighbourhood, a.city || a.town || a.state].filter(Boolean).filter((x, i, l) => l.indexOf(x) === i).join(', ');
+      if (!named) { SITE.name = j.name || [a.road, a.suburb || a.city_district, a.city || a.town].filter(Boolean).slice(0, 2).join(', ') || SITE.name; setTitle(); } }).catch(() => {});
     const [g, b] = await Promise.allSettled([loadGround(token), loadBuildings(token)]);
     if (token !== SITE.token) return;
     const nb = b.status === 'fulfilled' ? b.value : null;
@@ -2878,8 +2992,32 @@ SITE.root.visible = false; scene.add(SITE.root);
     const rows = [['Charging bays', String(SITE.spots)], ['Canopies', Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`).join(' + ')], ['Battery storage', `${(SITE.spots * 45).toLocaleString('en-US')} kWh`]];
     const ul = q('tw-stats'); ul.innerHTML = ''; rows.forEach(([a, v]) => { const li = document.createElement('li'), s = document.createElement('span'), b = document.createElement('b'); s.textContent = a; b.textContent = v; li.append(s, b); ul.appendChild(li); });
     const ch = q('tw-charge'); if (ch) { ch.classList.remove('is-on'); void ch.offsetWidth; ch.classList.add('is-on'); } }
-  function leaveSite() { if (!SITE.on) return; SITE.on = false; SITE.token = (SITE.token || 0) + 1; SITE.root.visible = false; bar.hidden = true; btn.hidden = false; stageEl.classList.remove('is-site');
+  function leaveSite() { if (!SITE.on) return; if (SITE.hd) setHD(false); SITE.on = false; SITE.token = (SITE.token || 0) + 1; SITE.root.visible = false; bar.hidden = true; btn.hidden = false; stageEl.classList.remove('is-site');
     controls.maxDistance = maxD0; scene.fog = (typeof FSD !== 'undefined' && FSD.on) ? scene.fog : fog0; select(current); applyEnv(); }
+
+  // ---- 4K environment: a sharper 3 km² satellite layer, full-resolution drawing and finer shadows; and a 3840 × 2160 image export ----
+  const q0 = { pr: renderer.getPixelRatio(), sm: sun.shadow.mapSize.x };
+  function setHD(on) { SITE.hd = on; $b('.tw-4k').setAttribute('aria-pressed', on);
+    renderer.setPixelRatio(on ? Math.min(devicePixelRatio, 2) : q0.pr); resize();
+    const sm = on ? Math.min(4096, renderer.capabilities.maxTextureSize) : q0.sm; if (sun.shadow.mapSize.x !== sm) { sun.shadow.mapSize.set(sm, sm); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
+    look(); }
+  async function enhance4k() { if (SITE.hd) { setHD(false); say('4K environment off.'); return; }
+    const t = SITE.token; setHD(true); say('Loading the 4K environment (sharper satellite ground over about 700 m)…');
+    const ok = await mosaic(t, 19, 5, -0.004, 'ground3'); if (t !== SITE.token) return; look();
+    say(ok > 60 ? '4K environment on: sharper ground, full-resolution drawing, finer shadows.' : '4K environment on. Some satellite images did not load; the rest are sharp.'); }
+  function render4k(w = 3840, h = 2160) { const old = new T.Vector2(); renderer.getSize(old); const pr = renderer.getPixelRatio(), asp = camera.aspect;
+    renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); draw();
+    const url = renderer.domElement.toDataURL('image/jpeg', 0.92);
+    renderer.setPixelRatio(pr); renderer.setSize(old.x, old.y, false); camera.aspect = asp; camera.updateProjectionMatrix(); draw(); return url; }
+  async function saveFile(name, blob) {
+    if (window.claude && window.claude.use) { try { const dl = await window.claude.use('downloads'); if (dl) { await dl.save({ filename: name, data: blob }); return; } } catch (e) { if (e && e.code === 'declined') return; } }
+    const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 8000); }
+  const slug = s => (s || 'site').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  SITE.render4k = render4k; SITE.saveFile = saveFile; SITE.slug = slug; SITE.boxOf = boxOf;
+  $b('.tw-4k').addEventListener('click', enhance4k);
+  $b('.tw-shot4k').addEventListener('click', async () => { const b = $b('.tw-shot4k'); b.disabled = true; b.textContent = 'Saving…';
+    try { const url = render4k(); const blob = await (await fetch(url)).blob(); await saveFile(`chargepoint-${slug(SITE.name)}-4k.jpg`, blob); b.textContent = 'Saved'; } catch (e) { b.textContent = 'Could not save'; }
+    setTimeout(() => { b.textContent = 'Save 4K image'; b.disabled = false; }, 1500); });
   $b('.tw-leave').addEventListener('click', leaveSite);
   $b('.tw-sat').addEventListener('click', () => { SITE.sat = !SITE.sat; look(); });
   $b('.tw-rot').addEventListener('input', e => { SITE.rot = +e.target.value; $b('.tw-rotv').textContent = SITE.rot + '°'; if (SITE.product) { SITE.product.rotation.y = T.MathUtils.degToRad(SITE.rot); clearFootprint(); draw(); } });
@@ -2900,6 +3038,227 @@ SITE.root.visible = false; scene.add(SITE.root);
   controls.addEventListener('change', () => { if (!SITE.on || !SITE.blds.length) return; const t = controls.target, d = camera.position.clone().sub(t), L = d.length(); if (L < 0.01) return;
     d.divideScalar(L); camRay2.set(t, d); camRay2.far = L + 1; const h = camRay2.intersectObjects(SITE.blds.filter(m => m.visible), false)[0];
     if (h && h.distance - 1 < L) camera.position.copy(t).addScaledVector(d, Math.max(2, h.distance - 1)); });
+
+  // ---- Proposal: the site becomes a ChargePoint "EV Charging Station Proposal" in the house format of the chargepoint-proposal skill
+  //      (cover rules of 14 Oct 2026, seven-section agenda, Arial, #10B981 / #047857 / #0F172A). No figure is invented: anything
+  //      not typed in the form prints as TBD. Shared Revenue is Option A: ChargePoint funds, builds and operates; the host shares the revenue.
+  const pform = document.createElement('div'); pform.className = 'tw-pform'; pform.hidden = true; pform.setAttribute('role', 'dialog'); pform.setAttribute('aria-label', 'Create proposal');
+  const sel = (n, opts, v) => `<select name="${n}">${opts.map(([k, t]) => `<option value="${k}"${k === v ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
+  pform.innerHTML = '<form class="tw-pf"><div class="tw-pf-head"><h3>Create proposal</h3><button class="tw-close" type="button" aria-label="Close">×</button></div>'
+    + '<div class="tw-pf-body">'
+    + '<p class="tw-pf-note">The proposal is built from this site: location, bays, canopies, chargers and 4K renders. Leave a field empty when the figure is not confirmed: it prints as <b>TBD</b>.</p>'
+    + '<fieldset><legend>Client</legend>'
+    + '<label>Client name (legal entity)<input name="client_name" required placeholder="e.g. Aldar Properties PJSC"></label>'
+    + '<label>Client contact<input name="client_contact" placeholder="Name, role"></label>'
+    + '<label>Client logo (optional)<input name="logo" type="file" accept="image/*"></label>'
+    + '<label>Location<input name="location"></label>'
+    + '<label>Site type' + sel('site_type', [['retail', 'Retail'], ['workplace', 'Workplace'], ['residential', 'Residential'], ['hospitality', 'Hospitality'], ['public', 'Public car park'], ['fleet', 'Fleet depot'], ['TBD', 'TBD']], 'retail') + '</label></fieldset>'
+    + '<fieldset><legend>Site answers</legend>'
+    + '<label>Available load at the DB (kW)<input name="available_load_kw" inputmode="decimal" placeholder="TBD"></label>'
+    + '<label>Indoor or outdoor' + sel('indoor_outdoor', [['outdoor', 'Outdoor'], ['indoor', 'Indoor'], ['mixed', 'Mixed']], 'outdoor') + '</label>'
+    + '<label>Access' + sel('public_private', [['public', 'Public'], ['semi-public', 'Semi-public'], ['private', 'Private']], 'public') + '</label>'
+    + '<label>New grid connection' + sel('grid_connection', [['TBD', 'TBD'], ['yes', 'Yes'], ['no', 'No']], 'TBD') + '</label>'
+    + '<label>Civil work' + sel('civil_work', [['yes', 'Yes'], ['no', 'No'], ['TBD', 'TBD']], 'yes') + '</label>'
+    + '<label>Utility approval' + sel('utility_approval', [['TBD', 'TBD'], ['TAQA', 'TAQA'], ['DEWA', 'DEWA'], ['none', 'None']], 'TBD') + '</label></fieldset>'
+    + '<fieldset><legend>Commercial model</legend>'
+    + '<label>Model' + sel('commercial_model', [['service', 'Shared Revenue: ChargePoint funds, host shares revenue (Option A)'], ['co-funded', 'Co-funded (Option B)'], ['supply-install', 'Supply and install, host owned (Option C)']], 'service') + '</label>'
+    + '<p class="tw-pf-note">Only figures Hany has confirmed. Empty prints TBD.</p>'
+    + '<div class="tw-pf-row"><label>Tariff (AED/kWh)<input name="tariff_aed_per_kwh" inputmode="decimal"></label><label>Host revenue share (%)<input name="host_revenue_share_pct" inputmode="decimal"></label></div>'
+    + '<div class="tw-pf-row"><label>Term (years)<input name="term_years" inputmode="numeric"></label><label>Programme (weeks)<input name="implementation_weeks" inputmode="numeric"></label></div>'
+    + '<div class="tw-pf-row"><label>Reference<input name="ref" placeholder="CP-PRP-2026-NNN"></label><label>Prepared by<input name="prepared_by" placeholder="Name, role"></label></div></fieldset>'
+    + '</div><div class="tw-pf-foot"><p class="tw-pf-status" aria-live="polite"></p><button type="submit" class="tw-build">Create the proposal</button></div></form>';
+  stageEl.appendChild(pform);
+  const F = pform.querySelector('form'), pst = t => { pform.querySelector('.tw-pf-status').textContent = t; };
+  pform.querySelector('.tw-close').addEventListener('click', () => { pform.hidden = true; });
+  $b('.tw-prop').addEventListener('click', () => { if (!SITE.on) return;
+    const el = F.elements; el.location.value = SITE.place || [SITE.name, SITE.area].filter(Boolean).join(', ');
+    const ab = SITE.lat < 24.6 || SITE.lon < 54.95, dxb = !ab && SITE.lat > 24.75 && SITE.lat < 25.36 && SITE.lon < 55.6;
+    if (el.utility_approval.value === 'TBD') el.utility_approval.value = ab ? 'TAQA' : dxb ? 'DEWA' : 'TBD';
+    pst(''); pform.hidden = false; el.client_name.focus(); });
+
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const tbd = v => (v === undefined || v === null || String(v).trim() === '' || v === 'TBD') ? 'TBD' : v;
+  const num = (v, u = '') => { v = tbd(v); if (v === 'TBD') return 'TBD'; const n = parseFloat(v); return isNaN(n) ? String(v) : (Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { maximumFractionDigits: 2 })) + u; };
+  const fileToURL = f => new Promise(res => { if (!f) return res(null); const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => res(null); r.readAsDataURL(f); });
+
+  // renders: cover, layout (plan), driver's eye, FSD, each 3840 × 2160
+  function viewsOfSite() {
+    const b = boxOf(SITE.product), c = b.getCenter(new T.Vector3()), s = b.getSize(new T.Vector3()), R = Math.max(s.x, s.z) * 0.5 + 6;
+    const fwd = new T.Vector3(0, 0, 1).applyAxisAngle(new T.Vector3(0, 1, 0), SITE.product.rotation.y), side = new T.Vector3(1, 0, 0).applyAxisAngle(new T.Vector3(0, 1, 0), SITE.product.rotation.y);
+    const at = (dir, dist, fov, lookY = 1.6) => ({ pos: c.clone().addScaledVector(dir.normalize(), dist), look: c.clone().setY(lookY), fov });
+    return {
+      cover: at(fwd.clone().multiplyScalar(1.0).addScaledVector(side, 0.85).setY(0.42), R / Math.sin(T.MathUtils.degToRad(30) / 2) * 0.82, 30, 2.2),
+      layout: { pos: c.clone().add(new T.Vector3(0.01, R / Math.tan(T.MathUtils.degToRad(40) / 2) * 1.15, 0.01)), look: c.clone(), fov: 40 },
+      eye: at(fwd.clone().addScaledVector(side, -0.35).setY(0.06), R * 1.2, 42, 2.0),
+      fsd: at(fwd.clone().addScaledVector(side, 0.9).setY(0.6), R / Math.sin(T.MathUtils.degToRad(35) / 2) * 0.5, 35, 1.5) };
+  }
+  async function shoot() {
+    const keep = { pos: camera.position.clone(), look: controls.target.clone(), fov: camera.fov, act: camTarget.active }, out = {}, V = viewsOfSite();
+    camTarget.active = false;
+    const go = v => { camera.position.copy(v.pos); controls.target.copy(v.look); camera.fov = v.fov; camera.up.set(0, 1, 0); camera.lookAt(v.look); camera.updateProjectionMatrix(); };
+    const wasF = typeof FSD !== 'undefined' && FSD.on, fbtn = document.getElementById('t-fsd');
+    if (wasF && fbtn) fbtn.click();
+    for (const k of ['cover', 'layout', 'eye']) { go(V[k]); await new Promise(r => requestAnimationFrame(r)); out[k] = render4k(); }
+    if (fbtn) { fbtn.click(); go(V.fsd); await new Promise(r => requestAnimationFrame(r)); out.fsd = render4k(); if (!wasF) fbtn.click(); }
+    camera.position.copy(keep.pos); controls.target.copy(keep.look); camera.fov = keep.fov; camera.updateProjectionMatrix(); controls.update(); draw();
+    return out;
+  }
+  function chargerRows(counts) {
+    const rows = [];
+    const ac = 2 * (counts.main || 0) + (counts.ac || 0), dc = 2 * (counts.dc || 0);
+    if (ac) rows.push({ type: 'AC', power_kw: 22, sockets: 2, units: ac, mounting: 'Pedestal under the Halo solar canopy (EVlink Pro AC, double gun)' });
+    if (dc) rows.push({ type: 'DC', power_kw: 180, sockets: 2, units: dc, mounting: 'Floor, under the Halo solar canopy (ChargePoint DC 180, 2 × CCS2)' });
+    if (counts.single) rows.push({ type: 'TBD', power_kw: 'TBD', sockets: 'TBD', units: counts.single, mounting: 'Halo 1 bay: standalone charger to be selected' });
+    return rows;
+  }
+  function intake(v, counts) {
+    const d = { version: '0.1', date: new Date().toISOString().slice(0, 10), prepared_by: tbd(v.prepared_by), client_name: v.client_name.trim(), client_contact: tbd(v.client_contact),
+      location: v.location.trim() || SITE.name, site_type: v.site_type, available_load_kw: v.available_load_kw ? parseFloat(v.available_load_kw) : 'TBD',
+      indoor_outdoor: v.indoor_outdoor, public_private: v.public_private, solar_shade: 'yes', grid_connection: v.grid_connection, civil_work: v.civil_work,
+      utility_approval: v.utility_approval, site_visualisation: 'yes', commercial_model: v.commercial_model, chargers: chargerRows(counts),
+      bays_total: 'TBD', bays_ev: SITE.spots, tariff_aed_per_kwh: v.tariff_aed_per_kwh ? parseFloat(v.tariff_aed_per_kwh) : 'TBD',
+      term_years: v.term_years ? parseFloat(v.term_years) : 'TBD', host_revenue_share_pct: v.host_revenue_share_pct ? parseFloat(v.host_revenue_share_pct) : 'TBD',
+      capex_aed: 'TBD', implementation_weeks: v.implementation_weeks ? parseFloat(v.implementation_weeks) : 'TBD', validity_days: 30,
+      visuals: ['site-cover-4k.jpg', 'site-layout-4k.jpg', 'site-drivers-view-4k.jpg', 'site-fsd-4k.jpg'],
+      site: { lat: +SITE.lat.toFixed(6), lon: +SITE.lon.toFixed(6), canopies: Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`), battery_kwh: SITE.spots * 45, solar_panels: SITE.spots * 6, parking_area: SITE.lot ? `${SITE.lot.label}, ${SITE.lot.capText}` : null },
+      notes: 'Generated by the ChargePoint Digital Twin site planner. Every TBD is a value Hany has not confirmed.' };
+    if (/^CP-PRP-\d{4}-\d{3}$/.test((v.ref || '').trim())) d.ref = v.ref.trim();
+    return d;
+  }
+  function docHTML(d, img, logo, counts) {
+    const model = d.commercial_model, brand = model === 'supply-install' ? 'Vcharge' : 'ChargePoint';
+    const label = { service: 'Shared Revenue: charging service funded by ChargePoint (Option A)', 'co-funded': 'Co-funded charging service (Option B)', 'supply-install': 'Supply and install, host owned (Option C)' }[model];
+    const ref = d.ref || 'TBD', canopyText = Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`).join(' + ');
+    const sockets = d.chargers.reduce((a, c) => a + (typeof c.sockets === 'number' && typeof c.units === 'number' ? c.sockets * c.units : 0), 0);
+    const T2 = (head, rows) => `<table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    const H = (n, t) => `<h2><span>${n}</span>${esc(t)}</h2>`, P = t => `<p>${t}</p>`, UL = a => `<ul>${a.map(x => `<li>${x}</li>`).join('')}</ul>`;
+    const fig = (src, cap) => src ? `<figure><img src="${src}" alt="${esc(cap)}"><figcaption>${esc(cap)}</figcaption></figure>` : '';
+    const steps = [['1', 'Agreement signed'], ['2', 'Detailed design and approvals' + (['TAQA', 'DEWA'].includes(d.utility_approval) ? ` (${d.utility_approval})` : '')]];
+    if (d.grid_connection === 'yes') steps.push([String(steps.length + 1), 'Grid connection']);
+    if (d.civil_work === 'yes') steps.push([String(steps.length + 1), 'Civil works and Halo canopy structure']);
+    ['Charger installation and cabling', 'Testing, commissioning, utility inspection', 'Go live on the ChargePoint network'].forEach(m => steps.push([String(steps.length + 1), m]));
+    const access = d.public_private === 'public' ? 'Open to all drivers on the ChargePoint app and network tariff.' : d.public_private === 'private' ? "Access limited to the client's users; white listing via the ChargePoint app." : 'Client users with priority access, public access at off peak hours as agreed.';
+    const svc = model === 'service' ? `
+      <div class="flow">
+        <div><b>1</b><h4>ChargePoint invests</h4><p>Halo canopies, chargers, batteries, installation and approvals.</p></div>
+        <div><b>2</b><h4>ChargePoint operates</h4><p>24/7 monitoring, driver support and maintenance on the ChargePoint network.</p></div>
+        <div><b>3</b><h4>Drivers pay</h4><p>Per kWh in the ChargePoint app, by card or with Vdrive in car payment.</p></div>
+        <div><b>4</b><h4>Revenue is shared</h4><p>The host receives its share every month with a full energy and session report.</p></div>
+      </div>
+      ${T2(['Item', 'Term'], [['Investment', 'ChargePoint funds chargers, installation, the Halo solar canopies, battery storage and O&M'], ['Host provides', 'Bays, power connection point, access, signage rights'], ['Tariff to drivers', num(d.tariff_aed_per_kwh, ' AED/kWh')], ['Host revenue share', num(d.host_revenue_share_pct, ' %')], ['Term', num(d.term_years, ' years')], ['O&M and support', 'Included. 24/7 driver support, remote monitoring, preventive maintenance']])}
+      <p class="formula">Host income each month = energy sold (kWh) × tariff (${esc(num(d.tariff_aed_per_kwh, ' AED/kWh'))}) × host share (${esc(num(d.host_revenue_share_pct, ' %'))})</p>
+      <p>The host invests nothing. Every session is metered and reported, so the share is paid on measured energy, not on estimates.</p>`
+      : model === 'co-funded' ? T2(['Item', 'Term'], [['Investment', 'Shared CAPEX, split TBD'], ['Host contribution', 'TBD'], ['Tariff to drivers', num(d.tariff_aed_per_kwh, ' AED/kWh')], ['Host revenue share', num(d.host_revenue_share_pct, ' %')], ['Term', num(d.term_years, ' years')], ['O&M and support', 'Included']])
+      : T2(['Item', 'Term'], [['Investment', 'Host owns the assets'], ['Supply and install price', 'TBD'], ['Operation', 'ChargePoint operates the station on its network under a service agreement'], ['Tariff', "Set by the host within network rules, or free to the host's users"], ['Warranty and O&M', 'TBD']]);
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(ref)} ${esc(d.client_name)} EV Charging Station Proposal</title><style>
+@page{size:A4;margin:0}*{box-sizing:border-box}body{margin:0;background:#e2e8f0;font:10.5pt/1.5 Arial,Helvetica,sans-serif;color:#0F172A}
+.bar{position:sticky;top:0;z-index:9;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0F172A;color:#fff;font:13px Arial}
+.bar button{font:600 13px Arial;padding:8px 14px;border-radius:8px;border:0;cursor:pointer;background:#10B981;color:#fff}.bar button.alt{background:#334155}
+.page{width:210mm;min-height:297mm;margin:12px auto;background:#fff;padding:18mm 18mm 20mm;position:relative;overflow:hidden;box-shadow:0 2px 12px rgba(15,23,42,.15)}
+.hdr{position:absolute;top:8mm;left:18mm;right:18mm;font-size:7.5pt;color:#475569;display:flex;justify-content:space-between}
+.ftr{position:absolute;bottom:8mm;left:18mm;right:18mm;font-size:7.5pt;color:#475569;display:flex;justify-content:space-between}
+.cover{padding:0}.cover .logos{position:absolute;top:14mm;left:16mm;right:16mm;display:flex;justify-content:space-between;align-items:flex-start;z-index:2}
+.cover .logos img{max-height:16mm;max-width:60mm}.cover .clogo{min-width:38mm;height:16mm;border:1px dashed #94a3b8;color:#94a3b8;font-size:8pt;display:flex;align-items:center;justify-content:center}
+.cover .hero{position:absolute;top:40mm;left:0;right:0;height:150mm;background-size:cover;background-position:center;-webkit-mask-image:linear-gradient(#000 70%,transparent);mask-image:linear-gradient(transparent,#000 12%,#000 72%,transparent)}
+.cover .title{position:absolute;left:18mm;right:18mm;top:196mm;text-align:center}.cover h1{font-size:30pt;margin:0;color:#0F172A}
+.cover .for{font-size:13pt;color:#475569;margin-top:6px}.cover .ref{position:absolute;bottom:16mm;left:0;right:0;text-align:center;font-size:8.5pt;color:#475569}
+.cover .rule{width:44mm;height:3px;margin:10px auto 0;background:linear-gradient(90deg,#047857,#10B981)}
+h2{font-size:16pt;color:#047857;margin:16px 0 8px}h2 span{color:#10B981;margin-right:10px}h3{font-size:12pt;color:#0F172A;margin:14px 0 4px}h4{margin:2px 0;font-size:10.5pt}
+table{width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:9.5pt}th{background:#047857;color:#fff;text-align:left;padding:6px 8px}td{border:1px solid #cbd5e1;padding:6px 8px;vertical-align:top}
+tbody tr:nth-child(even) td{background:#F1F5F9}
+.agenda li{list-style:none;font-size:12pt;margin:6px 0}.agenda b{color:#10B981;margin-right:12px}.agenda{padding:0}
+figure{margin:8px 0 12px}figure img{width:100%;display:block;border-radius:4px}figcaption{font-size:8.5pt;color:#475569;margin-top:4px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.muted{color:#475569;font-size:9.5pt}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 14px}.flow div{border:1px solid #cbd5e1;border-top:4px solid #10B981;border-radius:6px;padding:8px}
+.flow b{display:inline-flex;width:20px;height:20px;border-radius:50%;background:#047857;color:#fff;align-items:center;justify-content:center;font-size:9pt}.flow p{font-size:8.5pt;margin:4px 0 0;color:#475569}
+.formula{background:#F1F5F9;border-left:4px solid #10B981;padding:8px 10px;font-weight:bold}
+@media print{body{background:#fff}.bar{display:none}.page{margin:0;box-shadow:none;break-after:page}}
+</style></head><body>
+<div class="bar"><span>${esc(ref)} · v${esc(d.version)} · ${esc(d.client_name)}</span><button onclick="print()">Print or save as PDF</button><button class="alt" id="dl-json">Download intake (JSON)</button><button class="alt" id="dl-img">Download 4K renders</button></div>
+<section class="page cover">
+  <div class="logos">${CP_SRC && CP_SRC.full ? `<img src="${CP_SRC.full}" alt="${brand}">` : `<b>${brand}</b>`}${logo ? `<img src="${logo}" alt="${esc(d.client_name)}">` : '<div class="clogo">Client logo</div>'}</div>
+  <div class="hero" style="background-image:url(${img.cover})"></div>
+  <div class="title"><h1>EV Charging Station Proposal</h1><div class="for">Prepared for ${esc(d.client_name)} | ${esc(d.date)}</div><div class="rule"></div></div>
+  <div class="ref">Reference ${esc(ref)} · Version ${esc(d.version)} · Valid ${esc(d.validity_days)} days from the date above</div>
+</section>
+<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  <h2>Agenda</h2><ul class="agenda">${['About ChargePoint', 'Charging Station Specs', 'Proposed Solution', 'Technology', 'Payment Integration', 'Implementation Plan', 'Service Model'].map((a, i) => `<li><b>0${i + 1}</b>${a}</li>`).join('')}</ul>
+  <h3>Site at a glance</h3>${T2(['Item', 'Answer'], [['Client', d.client_name], ['Location', d.location], ['Coordinates', `${d.site.lat}, ${d.site.lon}`], ['Site type', tbd(d.site_type)], ['EV bays', String(d.bays_ev)], ['Halo canopies', canopyText], ['Available load', num(d.available_load_kw, ' kW')], ['Indoor / outdoor', d.indoor_outdoor], ['Public / private', d.public_private], ['Solar shade', 'yes'], ['New grid connection', d.grid_connection], ['Civil work', d.civil_work], ['Utility approval', d.utility_approval], ['Commercial model', label]])}
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>2</span></div></section>
+<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  ${H('01', 'About ChargePoint')}
+  ${P('ChargePoint is the Charge Point Operator holding the Abu Dhabi Integrated Transport Centre (ITC) concession for 1,800 EV charging sockets across Abu Dhabi and Al Ain. The company is a joint venture between Emirates Mobility (EMC, 65%) and Vcharge (35%).')}
+  ${UL(['Network operations: one platform, one app, one tariff across the concession network.', 'Vcharge, the engineering arm: charger supply, installation, commissioning and O&M.', 'Vdrive, the payments layer: in car and in app payment for charging, parking and tolls.'])}
+  ${model === 'supply-install' ? P('<i class="muted">This proposal is issued by Vcharge, the supply and installation arm, because the host will own the assets.</i>') : ''}
+  ${H('02', 'Charging Station Specs')}
+  ${T2(['Charger', 'Power', 'Sockets', 'Units', 'Mounting'], (d.chargers.length ? d.chargers : [{}]).map(c => [tbd(c.type), num(c.power_kw, ' kW'), num(c.sockets), num(c.units), tbd(c.mounting)]))}
+  ${P(`Total sockets: ${sockets || 'TBD'} · EV bays: ${d.bays_ev} of TBD total bays · Available load on site: ${esc(num(d.available_load_kw, ' kW'))}.`)}
+  <h3>Solar shade</h3>
+  ${P(`Chargers are mounted under ChargePoint Halo solar canopies: ${esc(canopyText)}, covering ${d.bays_ev} bays. The canopies carry ${d.site.solar_panels} solar panels (six per bay) and the lighting, keep vehicles and chargers out of direct sun, and stand on battery columns holding 45 kWh per bay (${d.site.battery_kwh.toLocaleString('en-US')} kWh in total). PV capacity, structure and foundation detail follow the site layout in section 03.`)}
+  ${d.indoor_outdoor !== 'indoor' ? P('<span class="muted">Outdoor units: IP65 minimum, UV and heat rated for UAE ambient conditions, with bollard protection.</span>') : ''}
+  ${d.indoor_outdoor !== 'outdoor' ? P('<span class="muted">Indoor units: IP54 minimum, ventilation and fire safety per the building\'s existing systems and Civil Defence requirements.</span>') : ''}
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>3</span></div></section>
+<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  ${H('03', 'Proposed Solution')}
+  ${P(`At ${esc(d.location)}${d.site.parking_area ? ` (${esc(d.site.parking_area)})` : ''}, ${esc(canopyText)} turn ${d.bays_ev} parking bays into a solar powered charging station, shown here in the client's real surroundings.`)}
+  <h3>Site layout and visualisation</h3>
+  ${fig(img.layout, 'Site layout: plan view of the Halo canopies on the real site')}
+  <div class="two">${fig(img.eye, "Driver's view on arrival")}${fig(img.fsd, 'Smart station view: live bays, charging status and surroundings')}</div>
+  <p class="muted">Views generated from the ChargePoint Digital Twin on satellite imagery (Esri, Maxar, Earthstar Geographics) and building data (OpenStreetMap contributors). Final layout follows the site survey.</p>
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>4</span></div></section>
+<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  <h3>Power and connection</h3>
+  ${d.grid_connection === 'yes' ? P('A new grid connection is required. ChargePoint prepares the load application and coordinates the connection with the utility; the connection lead time sits on the critical path in section 06.')
+    : d.grid_connection === 'no' ? P(`The station connects to the existing distribution board using the ${esc(num(d.available_load_kw, ' kW'))} spare capacity confirmed on site. Dynamic load management, supported by the canopy batteries, caps the station below that figure.`)
+    : P('Grid connection requirement: TBD pending the electrical survey.')}
+  <h3>Civil work</h3>
+  ${d.civil_work === 'yes' ? P('Civil scope: trenching and ducting from the distribution board to the bays, charger foundations, canopy foundations, bollards, bay marking and signage. Reinstatement to match the existing finish.') : d.civil_work === 'no' ? P('No civil work is required. Cabling runs on existing containment and chargers mount on existing structure.') : P('Civil work requirement: TBD pending the site survey.')}
+  <h3>Approvals</h3>
+  ${['TAQA', 'DEWA'].includes(d.utility_approval) ? P(`${d.utility_approval} approval is required for this installation. ChargePoint prepares and submits the application and the as built pack; the client provides the account details and owner's no objection.`) : d.utility_approval === 'none' ? P("No utility approval is required beyond the building's own electrical sign off.") : P('Utility approval requirement: TBD.')}
+  ${P(`Access: ${esc(d.public_private)} station. ${access}`)}
+  ${H('04', 'Technology')}
+  ${UL(['OCPP 1.6J / 2.0.1 chargers, remotely monitored 24/7 from the ChargePoint network operations centre.', 'Dynamic load management keeps the station inside the available load at all times.', 'ChargePoint app: locate, start, stop, receipt. RFID cards for fleet or staff use.', 'Uptime, energy and session reporting to the host, monthly.'])}
+  ${H('05', 'Payment Integration')}
+  ${UL(['Card and wallet payment in the ChargePoint app.', 'Vdrive in car payment for enabled vehicles.', 'Fleet and staff accounts with monthly invoicing where the host requires it.'])}
+  ${H('06', 'Implementation Plan')}
+  ${T2(['#', 'Milestone', 'Weeks'], steps.map(([n, m]) => [n, m, 'TBD']))}
+  ${P(`<span class="muted">Indicative programme: ${esc(num(d.implementation_weeks, ' weeks'))} from agreement. Dates depend on client access and approval lead times.</span>`)}
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>5</span></div></section>
+<section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
+  ${H('07', 'Service Model')}
+  ${P(`Recommended: ${esc(label)}.`)}
+  ${svc}
+  ${P('<i class="muted">Every figure marked TBD is confirmed in the signed agreement. Prices exclude VAT.</i>')}
+  <h3>Next steps</h3>${UL(['Confirm the preferred option.', 'Sign the agreement or letter of intent.', 'Kick off: survey sign off, approvals, programme.'])}
+  ${P(`<span class="muted">Prepared by ${esc(tbd(d.prepared_by))} · Client contact: ${esc(tbd(d.client_contact))}</span>`)}
+  ${fig(img.cover, `${canopyText} at ${d.location}`)}
+  <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>6</span></div></section>
+</body></html>`;
+  }
+  F.addEventListener('submit', async e => { e.preventDefault(); if (!SITE.on || !SITE.product) return;
+    const v = Object.fromEntries(new FormData(F).entries()); if (!v.client_name.trim()) { pst('Enter the client name.'); return; }
+    const win = window.open('', '_blank');   // opened straight from the click so pop-up blockers allow it
+    if (win) win.document.write('<p style="font:16px Arial;padding:40px;color:#0F172A">Preparing the proposal and its 4K renders…</p>');
+    pst('Rendering the 4K views…'); const go = F.querySelector('button[type=submit]'); go.disabled = true;
+    try {
+      const counts = {}; SITE.list.forEach(k => { counts[k] = (counts[k] || 0) + 1; });
+      const logo = await fileToURL(F.elements.logo.files[0]);
+      const img = await shoot(), d = intake(v, counts), html = docHTML(d, img, logo, counts);
+      const files = [['site-cover-4k.jpg', img.cover], ['site-layout-4k.jpg', img.layout], ['site-drivers-view-4k.jpg', img.eye], ['site-fsd-4k.jpg', img.fsd]];
+      const wire = (doc, close) => {
+        const save = async (name, data, type) => { const blob = typeof data === 'string' && data.startsWith('data:') ? await (await fetch(data)).blob() : new Blob([data], { type }); await saveFile(name, blob); };
+        doc.getElementById('dl-json').onclick = () => save(`${d.ref || 'CP-PRP-draft'}_${slug(d.client_name)}.json`, JSON.stringify(d, null, 2), 'application/json');
+        doc.getElementById('dl-img').onclick = async () => { for (const [n, u] of files) { await save(`${slug(d.client_name)}-${n}`, u); await new Promise(r => setTimeout(r, 400)); } };
+        if (close) { const b = doc.createElement('button'); b.className = 'alt'; b.textContent = 'Close'; b.onclick = close; doc.querySelector('.bar').appendChild(b); } };
+      if (win && !win.closed) { win.document.open(); win.document.write(html); win.document.close(); wire(win.document); pst('The proposal opened in a new tab.'); pform.hidden = true; }
+      else {   // pop-ups blocked: show the proposal inside the page instead
+        const ov = document.createElement('div'); ov.className = 'tw-prop-view'; const fr = document.createElement('iframe'); fr.title = 'Proposal'; ov.appendChild(fr); document.body.appendChild(ov);
+        fr.srcdoc = html; fr.onload = () => wire(fr.contentDocument, () => ov.remove()); document.body.style.overflow = 'hidden';
+        const obs = new MutationObserver(() => { if (!ov.isConnected) { document.body.style.overflow = ''; obs.disconnect(); } }); obs.observe(document.body, { childList: true });
+        pst('The proposal is open on screen. Use Print or save as PDF at the top.'); pform.hidden = true; }
+    } catch (err) { pst('The proposal could not be created: ' + (err && err.message || err)); if (win) win.close(); }
+    go.disabled = false; });
+
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dlg.hidden) { dlg.hidden = true; btn.focus(); } });
 })();
 
@@ -2975,6 +3334,32 @@ requestAnimationFrame(tick);
 .tw-map-res-x{appearance:none;border:0;background:none;font:500 12px var(--display);color:var(--dim);padding:6px 10px;text-align:left;cursor:pointer}
 .tw-map-blocked{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:24px;text-align:center;background:#f5f5f7;font:400 15px/1.5 var(--display);color:var(--fg)}
 .tw-map-blocked p{margin:0;max-width:34em}.tw-map-blocked a{font:600 16px var(--display);color:#1F7FB3}
+.tw-pk{appearance:none;border:0;cursor:pointer;font:600 13px var(--display);padding:9px 14px;border-radius:10px;color:#fff;background:linear-gradient(90deg,var(--b0),var(--b1));white-space:nowrap}
+.tw-pk:disabled{opacity:.5;cursor:default}
+.tw-map-res-h{margin:4px 10px 6px;font:600 12px var(--display);color:var(--dim)}
+.tw-sb-main button{background:linear-gradient(90deg,rgba(59,169,224,.16),rgba(141,198,63,.16));font-weight:600}
+.tw-sb-main .tw-4k[aria-pressed=true]{background:linear-gradient(90deg,var(--b0),var(--b1));color:#fff}
+.tw-sb-main .tw-prop{background:var(--fg);color:#fff}
+.stage.is-night .tw-sb-main .tw-prop{background:#f5f5f7;color:#1d1d1f}
+.tw-sb-main button:disabled{opacity:.6}
+.tw-pform{position:absolute;inset:16px;z-index:9;display:flex;justify-content:flex-end;pointer-events:none}
+.tw-pform[hidden]{display:none}
+.tw-pf{pointer-events:auto;width:min(460px,100%);height:100%;display:flex;flex-direction:column;background:#fff;color:var(--fg);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.25);overflow:hidden}
+.tw-pf-head{display:flex;align-items:center;padding:14px 14px 10px 18px;border-bottom:1px solid var(--line)}
+.tw-pf-head h3{flex:1;margin:0;font:700 17px var(--display);letter-spacing:-.02em}
+.tw-pf-body{flex:1;overflow:auto;padding:10px 18px 16px;display:grid;gap:10px;align-content:start}
+.tw-pf fieldset{border:0;margin:0;padding:0;display:grid;gap:8px}
+.tw-pf legend{font:600 11px var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:6px 0 2px}
+.tw-pf label{display:grid;gap:4px;font:500 12px var(--display);color:var(--dim)}
+.tw-pf input,.tw-pf select{font:500 14px var(--display);color:var(--fg);padding:9px 11px;border-radius:10px;border:1px solid rgba(29,29,31,.16);background:#fbfbfd;min-width:0;width:100%}
+.tw-pf input[type=file]{padding:7px}
+.tw-pf-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tw-pf-note{margin:0;font:400 12px/1.45 var(--display);color:var(--dim)}
+.tw-pf-foot{display:flex;align-items:center;gap:12px;padding:12px 18px;border-top:1px solid var(--line)}
+.tw-pf-status{flex:1;margin:0;font:500 12px/1.4 var(--display);color:var(--dim)}
+@media (max-width:760px){.tw-pform{inset:0}.tw-pf{width:100%;border-radius:20px}.tw-map-head .tw-pk{order:2}}
+.tw-prop-view{position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.55);display:flex}
+.tw-prop-view iframe{flex:1;border:0;background:#e2e8f0}
 </style>
 <style>
 /* ---------- interface v2: the 3D stage is the page. Title and live specs on the scene, model bar at the bottom,
