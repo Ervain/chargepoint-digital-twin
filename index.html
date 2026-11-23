@@ -2656,7 +2656,7 @@ SITE.root.visible = false; scene.add(SITE.root);
   dlg.innerHTML = '<div class="tw-map-head"><form class="tw-map-search" role="search"><input type="search" placeholder="Search a place, e.g. Al Wahda Mall, Abu Dhabi" aria-label="Search a place" autocomplete="off"><button type="submit">Search</button></form>'
     + '<div class="tw-map-seg" role="group" aria-label="Map type"><button type="button" data-ms="sat" aria-pressed="true">Satellite</button><button type="button" data-ms="map" aria-pressed="false">Map</button></div>'
     + '<button class="tw-close" type="button" aria-label="Close the map">×</button></div>'
-    + '<div class="tw-map-view"></div>'
+    + '<div class="tw-map-view"><div class="tw-map-results" hidden></div><div class="tw-map-blocked" hidden></div></div>'
     + '<div class="tw-map-foot"><p class="tw-map-hint" aria-live="polite">Search a place, then click the map where the canopies should stand.</p>'
     + '<label>Parking spots <input type="number" min="1" max="40" value="8" class="tw-spots"></label>'
     + '<label>Chargers <select class="tw-kind"><option value="ac">AC · Halo</option><option value="dc">DC fast · Halo Ray</option></select></label>'
@@ -2677,13 +2677,23 @@ SITE.root.visible = false; scene.add(SITE.root);
   const STREETS = 'https://tiles.openfreemap.org/styles/liberty';
   let map = null, marker = null, pin = null;
   const loadLib = () => window.maplibregl ? Promise.resolve() : new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  const LIVE = 'https://ervain.github.io/chargepoint-digital-twin/';
+  let reachable = null;
+  const reach = () => reachable !== null ? Promise.resolve(reachable) : new Promise(res => { const im = new Image(), t = setTimeout(() => { im.src = ''; res(reachable = false); }, 7000);
+    im.onload = () => { clearTimeout(t); res(reachable = true); }; im.onerror = () => { clearTimeout(t); res(reachable = false); }; im.crossOrigin = 'anonymous'; im.src = ESRI + '3/3/5?r=' + Date.now(); });
+  function blocked() { const b = $d('.tw-map-blocked'); b.hidden = false;
+    b.innerHTML = '<p><b>The map can\'t reach the map servers from this copy of the page.</b></p><p>Private Claude pages block outside connections. Open the live Digital Twin instead, where the map and search work:</p>';
+    const a = document.createElement('a'); a.href = LIVE; a.target = '_blank'; a.rel = 'noopener'; a.textContent = LIVE.replace('https://', ''); b.appendChild(a);
+    hint('The map is not available in this copy of the page.'); }
   async function openMap() {
     dlg.hidden = false; $d('input[type=search]').focus();
+    if (!(await reach())) { blocked(); return; }
     try { await loadLib(); } catch (e) { hint('The map could not load. Check the internet connection and try again.'); return; }
     if (!map) {
       map = new maplibregl.Map({ container: $d('.tw-map-view'), style: SAT, center: pin ? [pin.lon, pin.lat] : [54.3725, 24.4706], zoom: pin ? 18 : 15, maxZoom: 19, attributionControl: { compact: true } });
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-      map.on('click', e => setPin(e.lngLat.lat, e.lngLat.lng, null));
+      map.on('click', e => { $d('.tw-map-results').hidden = true; setPin(e.lngLat.lat, e.lngLat.lng, null); });
+      let tileErr = 0; map.on('error', () => { if (++tileErr === 6) hint('Some map images are not loading. Try the Map button above, or zoom a little.'); });
     } else setTimeout(() => map.resize(), 0);
   }
   function setPin(lat, lon, name) {
@@ -2693,13 +2703,24 @@ SITE.root.visible = false; scene.add(SITE.root);
   }
   dlg.querySelectorAll('[data-ms]').forEach(b => b.addEventListener('click', () => { if (!map) return;
     dlg.querySelectorAll('[data-ms]').forEach(x => x.setAttribute('aria-pressed', x === b)); map.setStyle(b.dataset.ms === 'sat' ? SAT : STREETS); }));
+  // place search: OpenStreetMap Nominatim first, Photon (komoot, also OpenStreetMap) as the backup; up to 5 matches to choose from
+  const withTimeout = (u, ms) => { const c = new AbortController(), t = setTimeout(() => c.abort(), ms); return fetch(u, { signal: c.signal }).finally(() => clearTimeout(t)); };
+  async function geocode(q) {
+    try { const r = await withTimeout('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=' + encodeURIComponent(q), 8000); if (r.ok) { const j = await r.json();
+      if (j.length) return j.map(x => ({ lat: +x.lat, lon: +x.lon, name: x.name || x.display_name.split(',')[0], where: x.display_name.split(',').slice(1, 3).join(',').trim() })); } } catch (e) {}
+    const r2 = await withTimeout('https://photon.komoot.io/api/?limit=5&q=' + encodeURIComponent(q), 8000); const j2 = await r2.json();
+    return (j2.features || []).map(f => { const p = f.properties || {}; return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: p.name || p.street || q, where: [p.city || p.district, p.country].filter(Boolean).join(', ') }; });
+  }
+  function choose(m) { $d('.tw-map-results').hidden = true; map.flyTo({ center: [m.lon, m.lat], zoom: 18, speed: 1.6 }); setPin(m.lat, m.lon, m.name); }
   $d('form').addEventListener('submit', async e => { e.preventDefault(); const q = $d('input[type=search]').value.trim(); if (!q) return;
-    if (!map) await openMap(); hint('Searching…');
-    try { const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(q)); const j = await r.json();
-      if (!j.length) { hint('No place found. Try a fuller address, for example "Yas Mall, Abu Dhabi".'); return; }
-      const lat = +j[0].lat, lon = +j[0].lon; map.flyTo({ center: [lon, lat], zoom: 18, speed: 1.6 });
-      setPin(lat, lon, j[0].name || j[0].display_name.split(',')[0]);
-    } catch (err) { hint('Search is not available right now. You can still click the map to drop the pin.'); } });
+    if (!map) await openMap(); if (!map) return; hint('Searching…'); const list = $d('.tw-map-results'); list.hidden = true; list.innerHTML = '';
+    let res; try { res = await geocode(q); } catch (err) { hint('Search is not available right now. You can still move the map and click to drop the pin.'); return; }
+    if (!res.length) { hint('No place found. Try a fuller name, for example "Yas Mall, Abu Dhabi".'); return; }
+    choose(res[0]);
+    if (res.length > 1) { res.forEach((m, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'tw-map-res';
+        const n = document.createElement('b'), w = document.createElement('span'); n.textContent = m.name; w.textContent = m.where; b.append(n, w); if (!i) b.setAttribute('aria-current', 'true');
+        b.addEventListener('click', () => { list.querySelectorAll('button').forEach(x => x.removeAttribute('aria-current')); b.setAttribute('aria-current', 'true'); choose(m); list.hidden = false; }); list.appendChild(b); });
+      const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-map-res-x'; x.textContent = 'Hide matches'; x.addEventListener('click', () => { list.hidden = true; }); list.appendChild(x); list.hidden = false; } });
   $d('.tw-close').addEventListener('click', () => { dlg.hidden = true; btn.focus(); });
   btn.addEventListener('click', openMap);
   $b('.tw-edit').addEventListener('click', openMap);
@@ -2768,7 +2789,8 @@ SITE.root.visible = false; scene.add(SITE.root);
   }
   // ---- buildings (extruded footprints at their mapped height) and roads ----
   // main source: the OpenFreeMap vector tiles (fast CDN), read through an off-screen map; backup: the public Overpass servers
-  function fromTiles() { return new Promise((res, rej) => {
+  const visible = () => document.hidden ? new Promise(r => { const f = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', f); r(); } }; document.addEventListener('visibilitychange', f); }) : Promise.resolve();
+  async function fromTiles() { await visible(); return new Promise((res, rej) => {
     const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:900px;height:900px;visibility:hidden;pointer-events:none'; document.body.appendChild(box);
     let m; const done = (v, e) => { clearTimeout(t); try { m && m.remove(); } catch (x) {} box.remove(); e ? rej(e) : res(v); };
     const t = setTimeout(() => done(null, new Error('tiles timeout')), 25000);
@@ -2945,6 +2967,14 @@ requestAnimationFrame(tick);
 }
 .stage.is-site .tw-name{font-size:clamp(24px,2.4vw,34px);line-height:1.1;letter-spacing:-.03em}
 .stage.is-site .tw-sub{font-variant-numeric:tabular-nums}
+.tw-map-results{position:absolute;left:12px;top:12px;z-index:3;width:min(360px,calc(100% - 64px));max-height:calc(100% - 24px);overflow:auto;display:grid;gap:2px;padding:6px;border-radius:14px;background:rgba(255,255,255,.95);box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.tw-map-results[hidden],.tw-map-blocked[hidden]{display:none}
+.tw-map-res{appearance:none;border:0;background:none;text-align:left;display:grid;gap:1px;padding:8px 10px;border-radius:10px;cursor:pointer;color:var(--fg)}
+.tw-map-res b{font:600 14px var(--display)}.tw-map-res span{font:400 12px var(--display);color:var(--dim)}
+.tw-map-res:hover{background:rgba(29,29,31,.05)}.tw-map-res[aria-current=true]{background:rgba(59,169,224,.12)}
+.tw-map-res-x{appearance:none;border:0;background:none;font:500 12px var(--display);color:var(--dim);padding:6px 10px;text-align:left;cursor:pointer}
+.tw-map-blocked{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:24px;text-align:center;background:#f5f5f7;font:400 15px/1.5 var(--display);color:var(--fg)}
+.tw-map-blocked p{margin:0;max-width:34em}.tw-map-blocked a{font:600 16px var(--display);color:#1F7FB3}
 </style>
 <style>
 /* ---------- interface v2: the 3D stage is the page. Title and live specs on the scene, model bar at the bottom,
