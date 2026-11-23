@@ -15,7 +15,7 @@
       residential: [85, 90, 90, 90, 85, 70, 50, 30, 20, 15, 15, 15, 15, 15, 20, 25, 35, 55, 75, 90, 100, 100, 95, 90],
       highway: [15, 10, 8, 6, 8, 15, 35, 60, 75, 70, 65, 70, 80, 75, 70, 75, 85, 95, 100, 90, 75, 55, 35, 20] };
     const STAY = { retail: [1.5, 0.75], workplace: [6, 2], residential: [9, 3], highway: [0.6, 0.3] };   // hours: mean, spread
-    const A = { site: 'retail', busy: 1, acKw: 11, dcKw: 90, needAc: 20, needDc: 35, eff: 0.21, grid: null, co2: 0.4 };
+    const A = { site: 'retail', busy: 1, pr: 0.8, acKw: 11, dcKw: 90, needAc: 20, needDc: 35, eff: 0.21, grid: null, co2: 0.4 };
     const PANEL_M2 = 2.382 * 1.131, PER_BAY_PANELS = 6, BAT_PER_BAY = 45;
 
     // ---- interface ----
@@ -35,17 +35,20 @@
         <label>Site pattern <select class="te-site"><option value="retail">Retail / mall</option><option value="workplace">Workplace</option><option value="residential">Residential</option><option value="highway">Highway / fleet</option></select></label>
         <label>Busy <input class="te-busy" type="range" min="0.4" max="1.6" step="0.05" value="1"><output class="te-busyv">100%</output></label>
         <label>Grid limit <input class="te-grid" type="range" min="0" max="100" step="1"><output class="te-gridv"></output></label>
-        <p>AC ${A.acKw} kW per car, DC ${A.dcKw} kW per car, ${A.needAc} kWh (AC) or ${A.needDc} kWh (DC) per visit, solar modules ${Math.round(A.eff * 100)}% efficient, ${BAT_PER_BAY} kWh battery per bay, grid ${A.co2} kg CO₂ per kWh. Clear-sky solar adjusted for today's cloud. A simulation with these stated assumptions, not measured data.</p>
+        <p>AC ${A.acKw} kW per car, DC ${A.dcKw} kW per car, ${A.needAc} kWh (AC) or ${A.needDc} kWh (DC) per visit, solar modules ${Math.round(A.eff * 100)}% efficient with ${Math.round(A.pr * 100)}% system performance (heat, dust, inverter), ${BAT_PER_BAY} kWh battery per bay, grid ${A.co2} kg CO₂ per kWh. Clear-sky solar adjusted for today's cloud. A simulation with these stated assumptions, not measured data.</p>
       </details>`;
     stage.appendChild(P);
     const $ = s => P.querySelector(s);
     const chart = $('.te-chart'), g = chart.getContext('2d');
 
     // ---- the day, simulated ----
-    let SIM = null, t = 48, playing = false, last = 0, open = false;
+    let SIM = null, t = 48, playing = false, last = 0, open = false, VIS = []; const VISUSED = new Set();   // VIS: car model index → socket index
     const seeded = n => { let x = n * 9301 + 49297; return () => (x = (x * 16807) % 2147483647) / 2147483647; };
     function simulate() {
-      const slots = S.carSlots || [], n = slots.length, bays = S.spots || n, day = siteMidnight();
+      const SOCK = { main: ['ac', 4], ac: ['ac', 2], dc: ['dc', 4], single: [null, 0] }, slots = [];
+      (S.list || []).forEach(k => { const [kind, n2] = SOCK[k] || [null, 0]; for (let q = 0; q < n2; q++) slots.push({ kind }); });
+      VIS = (S.carSlots || []).map(c => { const k = slots.findIndex((x, i) => x.kind === c.kind && !VISUSED.has(i)); if (k >= 0) VISUSED.add(k); return k; }); VISUSED.clear();
+      const n = slots.length, bays = S.spots || n, day = siteMidnight();
       const cloud = LV.wx ? LV.wx.cloud / 100 : 0, area = bays * PER_BAY_PANELS * PANEL_M2, cap = bays * BAT_PER_BAY;
       const peakKw = slots.reduce((a, s) => a + (s.kind === 'dc' ? A.dcKw : A.acKw), 0) || 1;
       if (A.grid === null || A.grid > peakKw) A.grid = Math.max(11, Math.round(peakKw * 0.35));
@@ -56,7 +59,7 @@
       for (let i = 0; i < STEPS; i++) {
         const when = new Date(day.valueOf() + i * DT * 3600e3 + DT * 1800e3), h = Math.floor(i * DT), p = prof[h] / 100 * A.busy;
         const sp = sunPos(when, S.lat, S.lon), ghi = sp.alt > 0 ? 1050 * Math.pow(Math.sin(sp.alt), 1.15) * (1 - 0.75 * Math.pow(cloud, 3.4)) : 0;
-        const pv = area * A.eff * ghi / 1000;
+        const pv = area * A.eff * ghi / 1000 * A.pr;   // performance ratio: heat, dust, wiring and inverter losses
         const o = [], c = []; let D = 0;
         slots.forEach((s, k) => { const q = st[k];
           if (q.left <= 0 && rnd() < Math.min(0.9, p * (s.kind === 'dc' ? 0.6 : 0.35))) {
@@ -85,7 +88,7 @@
         ['From the sun', `${Math.round(share * 100)}%`, `${f0(SIM.solarUsed)} kWh solar used`],
         ['Grid peak', `${f0(SIM.gridPeak)} kW`, `${f0(SIM.noBatPeak)} kW without batteries`],
         ['CO₂ avoided', `${f0(SIM.solarUsed * A.co2)} kg`, 'solar energy, today'],
-        ['Now', `${carsNow}/${SIM.n} charging`, `solar ${f0(SIM.sol[i])} kW · grid ${f0(SIM.grid[i])} kW`],
+        ['Now', `${carsNow}/${SIM.n} sockets charging`, `solar ${f0(SIM.sol[i])} kW · grid ${f0(SIM.grid[i])} kW`],
         ['Battery', `${Math.round(SIM.soc[i] * 100)}%`, `${f0(SIM.cap)} kWh across the columns`]]
         .map(([a, b, c]) => `<div><span>${a}</span><b>${b}</b><em>${c}</em></div>`).join(''); }
     function paint() { if (!SIM) return; const W = chart.width, H = chart.height, pad = 18, x = i => pad + (W - 2 * pad) * i / (STEPS - 1), y = v => H - pad - (H - 2 * pad) * v / SIM.maxY;
@@ -108,7 +111,7 @@
     const GREEN = new T.Color(0x8DC63F), BLUE = new T.Color(0x3BA9E0), tmp = new T.Vector3();
     function flow(now) { if (!pts || !SIM) return; const i = Math.floor(t), pos = pts.geometry.attributes.position, col = pts.geometry.attributes.color;
       const solarFrac = SIM.dem[i] > 0 ? Math.min(1, (Math.min(SIM.sol[i], SIM.dem[i]) + SIM.dis[i] * 0.7) / SIM.dem[i]) : 0;
-      (S.carSlots || []).forEach((s, k) => { const on = SIM.chg[i][k] > 0; s.car.getWorldPosition(tmp);
+      (S.carSlots || []).forEach((s, k) => { const on = VIS[k] >= 0 && SIM.chg[i][VIS[k]] > 0; s.car.getWorldPosition(tmp);
         for (let j = 0; j < PER; j++) { const id = k * PER + j, sd = seeds[id], u = (sd[0] + now / 1400 * (0.8 + sd[1] * 0.5)) % 1;
           if (!on) { pos.setXYZ(id, 0, -999, 0); continue; }
           const yy = 3.35 - u * 2.55, sway = Math.sin(u * Math.PI) * 0.55 * sd[2];
@@ -119,7 +122,7 @@
     // ---- clock ----
     const label = () => { const m = Math.floor(t * DT * 60), hh = String(Math.floor(m / 60) % 24).padStart(2, '0'), mm = String(m % 60).padStart(2, '0'); return `${hh}:${mm}`; };
     function setT(v, fromUser) { t = ((v % STEPS) + STEPS) % STEPS; $('.te-slider').value = t; $('.te-time').textContent = label();
-      if (SIM) { const i = Math.floor(t); (S.carSlots || []).forEach((s, k) => { s.car.visible = SIM.occ[i][k]; });
+      if (SIM) { const i = Math.floor(t); (S.carSlots || []).forEach((s, k) => { s.car.visible = VIS[k] >= 0 ? SIM.occ[i][VIS[k]] : false; });
         LV.simDate = new Date(SIM.day.valueOf() + t * DT * 3600e3); applyLive(); kpis(); paint(); }
       if (fromUser) { playing = false; $('.te-play').textContent = '▶'; } draw(); }
     function loop(now) { if (!open) return; requestAnimationFrame(loop);
