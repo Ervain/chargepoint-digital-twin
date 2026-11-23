@@ -2665,10 +2665,10 @@ SITE.root.visible = false; scene.add(SITE.root);
     + '<button type="button" class="tw-build" disabled>Build the site here</button></div>';
   stageEl.appendChild(dlg);
   const bar = document.createElement('div'); bar.className = 'tw-sitebar'; bar.hidden = true;
-  bar.innerHTML = '<div class="tw-sb-insight" hidden></div><p class="tw-sb-sub" aria-live="polite"></p>'
+  bar.innerHTML = '<div class="tw-live" hidden aria-live="polite"></div><div class="tw-sb-insight" hidden></div><p class="tw-sb-sub" aria-live="polite"></p>'
     + '<label class="tw-sb-row"><span>Turn</span><input type="range" min="0" max="359" value="0" class="tw-rot" aria-label="Turn the canopies"><output class="tw-rotv">0°</output></label>'
     + '<div class="tw-sb-btns"><button type="button" class="tw-sat" aria-pressed="true">Satellite ground</button><button type="button" class="tw-edit">Change site</button><button type="button" class="tw-leave">Leave site</button></div>'
-    + '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-prop">Create proposal</button></div>'
+    + '<div class="tw-sb-btns tw-sb-main"><button type="button" class="tw-livebtn" aria-pressed="true" title="Match the scene to this moment at the site: real sun position and shadows, night after sunset, live weather and dust haze">Live</button><button type="button" class="tw-4k" aria-pressed="false">4K environment</button><button type="button" class="tw-shot4k">Save 4K image</button><button type="button" class="tw-prop">Create proposal</button></div>'
     + '<p class="tw-sb-credit">Map data © OpenStreetMap contributors · Imagery © Esri, Maxar, Earthstar Geographics</p>';
   stageEl.appendChild(bar);
   const $d = s => dlg.querySelector(s), $b = s => bar.querySelector(s);
@@ -2680,13 +2680,13 @@ SITE.root.visible = false; scene.add(SITE.root);
   const STREETS = 'https://tiles.openfreemap.org/styles/liberty';
   let map = null, marker = null, pin = null;
   const loadLib = () => window.maplibregl ? Promise.resolve() : new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
-  const LIVE = 'https://ervain.github.io/chargepoint-digital-twin/';
+  const LIVE_URL = 'https://ervain.github.io/chargepoint-digital-twin/';
   let reachable = null;
   const reach = () => reachable !== null ? Promise.resolve(reachable) : new Promise(res => { const im = new Image(), t = setTimeout(() => { im.src = ''; res(reachable = false); }, 7000);
     im.onload = () => { clearTimeout(t); res(reachable = true); }; im.onerror = () => { clearTimeout(t); res(reachable = false); }; im.crossOrigin = 'anonymous'; im.src = ESRI + '3/3/5?r=' + Date.now(); });
   function blocked() { const b = $d('.tw-map-blocked'); b.hidden = false;
     b.innerHTML = '<p><b>The map can\'t reach the map servers from this copy of the page.</b></p><p>Private Claude pages block outside connections. Open the live Digital Twin instead, where the map and search work:</p>';
-    const a = document.createElement('a'); a.href = LIVE; a.target = '_blank'; a.rel = 'noopener'; a.textContent = LIVE.replace('https://', ''); b.appendChild(a);
+    const a = document.createElement('a'); a.href = LIVE_URL; a.target = '_blank'; a.rel = 'noopener'; a.textContent = LIVE_URL.replace('https://', ''); b.appendChild(a);
     hint('The map is not available in this copy of the page.'); }
   async function openMap() {
     dlg.hidden = false; $d('input[type=search]').focus();
@@ -2952,7 +2952,9 @@ SITE.root.visible = false; scene.add(SITE.root);
   const outerM = new T.MeshStandardMaterial({ color: 0xcdbfa6, roughness: 1, metalness: 0 });
   const groundM = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 }), groundM2 = groundM.clone(), groundM3 = groundM.clone();
   const MATS = { ground: groundM, ground2: groundM2, ground3: groundM3 };
-  const outer = new T.Mesh(new T.PlaneGeometry(4000, 4000), outerM); outer.rotation.x = -Math.PI / 2; outer.position.y = -0.03; outer.receiveShadow = true; SITE.root.add(outer);
+  // flat ground layers are drawn right after the sky dome (render order -10), in a fixed order and without writing depth, so they never flicker against each other
+  const flat = (m, order) => { m.renderOrder = order; (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => { x.depthWrite = false; }); return m; };
+  const outer = flat(new T.Mesh(new T.PlaneGeometry(4000, 4000), outerM), -9.6); outer.rotation.x = -Math.PI / 2; outer.position.y = -0.03; outer.receiveShadow = true; SITE.root.add(outer);
 
   // ---- the product: the parking spots become a mix of Halo 4 / Halo 2 / Halo 1 (or Halo 4 Ray), in rows that sit back to back ----
   function placeProduct() {
@@ -2997,7 +2999,7 @@ SITE.root.visible = false; scene.add(SITE.root);
     const mat = MATS[slot];
     if (SITE[slot]) { SITE.root.remove(SITE[slot]); SITE[slot].geometry.dispose(); }
     if (mat.userData.tex) mat.userData.tex.dispose(); mat.userData.tex = t;
-    const m = new T.Mesh(new T.PlaneGeometry(bx - ax, bz - az), mat); m.rotation.x = -Math.PI / 2; m.position.set((ax + bx) / 2, y, (az + bz) / 2); m.receiveShadow = true;
+    const m = flat(new T.Mesh(new T.PlaneGeometry(bx - ax, bz - az), mat), { ground: -9.5, ground2: -9.4, ground3: -9.3 }[slot]); m.rotation.x = -Math.PI / 2; m.position.set((ax + bx) / 2, y, (az + bz) / 2); m.receiveShadow = true;
     SITE.root.add(m); SITE[slot] = m; look(); return ok;
   }
   // ---- buildings (extruded footprints at their mapped height) and roads ----
@@ -3046,7 +3048,7 @@ SITE.root.visible = false; scene.add(SITE.root);
       for (let i = 0; i < p.length - 1; i++) { const [x1, z1] = p[i], [x2, z2] = p[i + 1]; if (Math.hypot(x1, z1) > LIM + 200) continue; const dx = x2 - x1, dz = z2 - z1, L = Math.hypot(dx, dz) || 1, nx = -dz / L * w, nz = dx / L * w;
         roadPos.push(x1 + nx, 0, z1 + nz, x1 - nx, 0, z1 - nz, x2 + nx, 0, z2 + nz, x2 + nx, 0, z2 + nz, x1 - nx, 0, z1 - nz, x2 - nx, 0, z2 - nz); } }
     if (roadPos.length) { const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(roadPos, 3)); g.computeVertexNormals();
-      roadM.side = T.DoubleSide; const rm = new T.Mesh(g, roadM); rm.position.y = 0.012; rm.receiveShadow = true; SITE.root.add(rm); SITE.roads.push(rm); }
+      roadM.side = T.DoubleSide; const rm = flat(new T.Mesh(g, roadM), -9.2); rm.position.y = 0.012; rm.receiveShadow = true; SITE.root.add(rm); SITE.roads.push(rm); }
     clearFootprint(); look(); return nB;
   }
   // ---- looks: normal (satellite or plain ground, white massing model) and FSD (dark, outlined) ----
@@ -3070,12 +3072,12 @@ SITE.root.visible = false; scene.add(SITE.root);
   const lotM = new T.LineBasicMaterial({ color: 0x8DC63F, transparent: true, opacity: 0.95 });
   function drawLot() { if (SITE.lotLine) { SITE.root.remove(SITE.lotLine); SITE.lotLine.geometry.dispose(); SITE.lotLine = null; } if (!SITE.lot || !SITE.lot.ring) return;
     const pts = SITE.lot.ring.map(([lo, la]) => { const [x, z] = toXZ(la, lo); return new T.Vector3(x, 0.06, z); });
-    const ln = new T.Line(new T.BufferGeometry().setFromPoints(pts), lotM); ln.raycast = () => {}; SITE.root.add(ln); SITE.lotLine = ln; }
+    const ln = flat(new T.Line(new T.BufferGeometry().setFromPoints(pts), lotM), -9.1); ln.raycast = () => {}; SITE.root.add(ln); SITE.lotLine = ln; }
 
   // ---- site insight in 3D: a radar pulse spreading from the canopies, mapped chargers within 2 km as pins with their distance, and the score card ----
   const INS = { g: new T.Group(), rings: [] }; SITE.root.add(INS.g);
   const ringM = () => new T.MeshBasicMaterial({ color: 0x3BA9E0, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false, side: T.DoubleSide });
-  for (let i = 0; i < 3; i++) { const m = new T.Mesh(new T.RingGeometry(0.985, 1, 160), ringM()); m.rotation.x = -Math.PI / 2; m.position.y = 0.08; m.userData.ph = i / 3; m.raycast = () => {}; INS.g.add(m); INS.rings.push(m); }
+  for (let i = 0; i < 3; i++) { const m = flat(new T.Mesh(new T.RingGeometry(0.985, 1, 160), ringM()), -9); m.rotation.x = -Math.PI / 2; m.position.y = 0.08; m.userData.ph = i / 3; m.raycast = () => {}; INS.g.add(m); INS.rings.push(m); }
   const pinTex = (title, sub) => { const c = document.createElement('canvas'); c.width = 512; c.height = 152; const g = c.getContext('2d');
     g.fillStyle = 'rgba(15,17,22,.88)'; g.beginPath(); g.roundRect(4, 4, 504, 112, 56); g.fill();
     g.fillStyle = '#ff9f1c'; g.beginPath(); g.arc(60, 60, 38, 0, Math.PI * 2); g.fill();
@@ -3110,7 +3112,7 @@ SITE.root.visible = false; scene.add(SITE.root);
     drawLot();
     dlg.hidden = true; SITE.on = true; SITE.root.visible = true; bar.hidden = false; btn.hidden = true; stageEl.classList.add('is-site');
     hideStudio(); applyEnv(); placeProduct(); INS.c = null; frameSite(); setTitle(); controls.maxDistance = 420;
-    say('Loading the real buildings and the satellite ground…');
+    say('Loading the real buildings and the satellite ground…'); LV.wx = null; if (LV.on) setLive(true);
     SITE.area = ''; const named = !!pin.name;
     fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${pin.lat}&lon=${pin.lon}`).then(r => r.json()).then(j => { if (token !== SITE.token || !j) return; const a = j.address || {};
       SITE.area = [a.suburb || a.city_district || a.neighbourhood, a.city || a.town || a.state].filter(Boolean).filter((x, i, l) => l.indexOf(x) === i).join(', ');
@@ -3130,18 +3132,75 @@ SITE.root.visible = false; scene.add(SITE.root);
     const rows = [['Charging bays', String(SITE.spots)], ['Canopies', Object.entries(counts).map(([k, n]) => `${n} × ${UNIT[k]}`).join(' + ')], ['Battery storage', `${(SITE.spots * 45).toLocaleString('en-US')} kWh`]];
     const ul = q('tw-stats'); ul.innerHTML = ''; rows.forEach(([a, v]) => { const li = document.createElement('li'), s = document.createElement('span'), b = document.createElement('b'); s.textContent = a; b.textContent = v; li.append(s, b); ul.appendChild(li); });
     const ch = q('tw-charge'); if (ch) { ch.classList.remove('is-on'); void ch.offsetWidth; ch.classList.add('is-on'); } }
-  function leaveSite() { if (!SITE.on) return; if (SITE.hd) setHD(false); SITE.on = false; SITE.token = (SITE.token || 0) + 1; SITE.root.visible = false; bar.hidden = true; btn.hidden = false; stageEl.classList.remove('is-site');
+  function leaveSite() { if (!SITE.on) return; if (SITE.hd) setHD(false); clearInterval(LV.timer); $b('.tw-live').hidden = true; siteFog.reset();
+    if (PLUS.dome && domeBase !== null) PLUS.dome.rotation.y = domeBase; if (LV.forced && ENV.night) { LV.forced = false; const nb = document.getElementById('opt-night'); if (nb) setTimeout(() => nb.click(), 0); } SITE.on = false; SITE.token = (SITE.token || 0) + 1; SITE.root.visible = false; bar.hidden = true; btn.hidden = false; stageEl.classList.remove('is-site');
     controls.maxDistance = maxD0; scene.fog = (typeof FSD !== 'undefined' && FSD.on) ? scene.fog : fog0; select(current); applyEnv(); }
 
+
+  // ---- Live: the scene matches this moment at the site. Sun position from the site's coordinates and the current time (astronomical formula),
+  //      night after sunset, cloud and dust haze from Open-Meteo (free, no key). Refreshed every minute; weather every 10 minutes.
+  const LV = { on: true, wx: null, timer: 0, wxAt: 0, busy: false, forced: false };
+  const RAD = Math.PI / 180, J1970 = 2440588, J2000 = 2451545, OBL = RAD * 23.4397;
+  function sunPos(date, lat, lng) { const d = date.valueOf() / 864e5 - 0.5 + J1970 - J2000, M = RAD * (357.5291 + 0.98560028 * d);
+    const L = M + RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M)) + RAD * 102.9372 + Math.PI;
+    const dec = Math.asin(Math.sin(OBL) * Math.sin(L)), ra = Math.atan2(Math.sin(L) * Math.cos(OBL), Math.cos(L)), phi = RAD * lat, H = RAD * (280.16 + 360.9856235 * d) + RAD * lng - ra;
+    return { az: Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)) + Math.PI, alt: Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H)) }; }
+  const WMO = c => c === 0 ? 'Clear' : c <= 2 ? 'Partly cloudy' : c === 3 ? 'Overcast' : c <= 48 ? 'Fog' : c <= 57 ? 'Drizzle' : c <= 67 ? 'Rain' : c <= 77 ? 'Snow' : c <= 82 ? 'Showers' : 'Thunderstorm';
+  async function fetchWx() { const la = SITE.lat.toFixed(3), lo = SITE.lon.toFixed(3);
+    try { const [a, b] = await Promise.all([
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current=temperature_2m,cloud_cover,weather_code,wind_speed_10m,relative_humidity_2m&timezone=auto`).then(r => r.json()),
+        fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&current=dust,aerosol_optical_depth&timezone=auto`).then(r => r.json()).catch(() => null)]);
+      LV.wx = { t: a.current.temperature_2m, cloud: a.current.cloud_cover, code: a.current.weather_code, wind: a.current.wind_speed_10m, rh: a.current.relative_humidity_2m, off: a.utc_offset_seconds,
+        dust: b && b.current ? b.current.dust : null, aod: b && b.current ? b.current.aerosol_optical_depth : null }; LV.wxAt = Date.now();
+    } catch (e) { LV.wx = LV.wx || null; } }
+  let domeBase = null, dirBase = null;
+  function applyLive() { if (LV.busy || !SITE.on) return; LV.busy = true;
+    try {
+      const now = new Date(), sp = sunPos(now, SITE.lat, SITE.lon), alt = sp.alt / RAD, wx = LV.wx;
+      const night = alt < -0.8, nb = document.getElementById('opt-night');
+      if (nb && night !== ENV.night) { LV.forced = night; nb.click(); }   // re-enters applyEnv, which re-applies Live
+      if (!night && !(typeof FSD !== 'undefined' && FSD.on)) {
+        const ch = Math.cos(sp.alt), dir = new T.Vector3(Math.sin(sp.az) * ch, Math.sin(sp.alt), -Math.cos(sp.az) * ch).normalize();
+        sun.position.copy(sun.target.position).addScaledVector(dir, 80);
+        const cloud = wx ? wx.cloud / 100 : 0, lowSun = Math.min(1, Math.max(0, alt / 25));
+        sun.intensity = 3.1 * Math.max(0.25, Math.min(1, Math.sin(Math.max(sp.alt, 0.02)) * 1.8)) * (1 - 0.6 * cloud);
+        sun.color.set(0xffb072).lerp(new T.Color(0xfff0dc), lowSun);
+        if (hemi) hemi.intensity = 0.22 + 0.25 * cloud;
+        if (PLUS.dome && PLUS.dir) { if (domeBase === null) { domeBase = PLUS.dome.rotation.y; dirBase = PLUS.dir.clone(); }
+          PLUS.dome.rotation.y = domeBase + (Math.atan2(-dir.z, dir.x) - Math.atan2(-dirBase.z, dirBase.x)); }
+        const aod = wx && wx.aod != null ? wx.aod : 0.2, far = Math.max(450, 1700 / (1 + aod * 2.2) * (1 - 0.35 * cloud));
+        if (scene.fog === siteFog) siteFog.setRange(far * 0.22, far);
+      }
+      card(now, alt, night);
+    } finally { LV.busy = false; } }
+  function card(now, alt, night) { const el = $b('.tw-live'), wx = LV.wx; el.hidden = !LV.on; if (!LV.on) return;
+    const off = wx ? wx.off : 14400, local = new Date(now.valueOf() + off * 1000), hh = String(local.getUTCHours()).padStart(2, '0'), mm = String(local.getUTCMinutes()).padStart(2, '0');
+    const dust = wx && wx.dust != null ? (wx.dust < 50 ? 'low dust' : wx.dust < 150 ? 'moderate dust haze' : 'heavy dust haze') : '';
+    const sunTxt = night ? 'after sunset, station lights on' : alt < 8 ? `low sun (${Math.round(alt)}°)` : `sun ${Math.round(alt)}° high`;
+    el.innerHTML = `<span class="tw-live-dot"></span><b>LIVE</b><span>${hh}:${mm} at the site</span>`;
+    const p = document.createElement('p'); p.textContent = [wx ? `${Math.round(wx.t)}°C, ${WMO(wx.code)}` : 'Weather loading…', dust, sunTxt].filter(Boolean).join(' · '); el.appendChild(p); }
+  async function liveTick() { if (!SITE.on || !LV.on) return; if (!LV.wx || Date.now() - LV.wxAt > 600000) await fetchWx(); applyLive(); draw(); }
+  function setLive(on) { LV.on = on; $b('.tw-livebtn').setAttribute('aria-pressed', on); clearInterval(LV.timer);
+    if (on && SITE.on) { liveTick(); LV.timer = setInterval(liveTick, 60000); }
+    else { $b('.tw-live').hidden = true; siteFog.reset(); if (PLUS.dome && domeBase !== null) PLUS.dome.rotation.y = domeBase;
+      if (LV.forced && ENV.night) { LV.forced = false; const nb = document.getElementById('opt-night'); if (nb) nb.click(); } else applyEnv(); draw(); } }
+  $b('.tw-livebtn').addEventListener('click', () => setLive(!LV.on));
   // ---- 4K environment: a sharper 3 km² satellite layer, full-resolution drawing and finer shadows; and a 3840 × 2160 image export ----
   const q0 = { pr: renderer.getPixelRatio(), sm: sun.shadow.mapSize.x };
   function setHD(on) { SITE.hd = on; $b('.tw-4k').setAttribute('aria-pressed', on);
     renderer.setPixelRatio(on ? Math.min(devicePixelRatio, 2) : q0.pr); resize();
     const sm = on ? Math.min(4096, renderer.capabilities.maxTextureSize) : q0.sm; if (sun.shadow.mapSize.x !== sm) { sun.shadow.mapSize.set(sm, sm); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
+    fitShadow(on);
     look(); }
+  // shadows: a tight box around the station in 4K (crisp edges), the wide default otherwise
+  function fitShadow(tight) { const cam = sun.shadow.camera;
+    if (tight && SITE.product) { const b = boxOf(SITE.product), sz = b.getSize(new T.Vector3()), R = Math.max(sz.x, sz.z) * 0.5 + 25, c = b.getCenter(new T.Vector3());
+      cam.left = cam.bottom = -R; cam.right = cam.top = R; sun.target.position.copy(c); if (!sun.target.parent) scene.add(sun.target); }
+    else { cam.left = cam.bottom = -46; cam.right = cam.top = 46; sun.target.position.set(0, 0, 0); }
+    cam.updateProjectionMatrix(); sun.shadow.needsUpdate = true; }
   async function enhance4k() { if (SITE.hd) { setHD(false); say('4K environment off.'); return; }
     const t = SITE.token; setHD(true); say('Loading the 4K environment (sharper satellite ground over about 700 m)…');
-    const ok = await mosaic(t, 19, 5, -0.004, 'ground3'); if (t !== SITE.token) return; look();
+    const ok = await mosaic(t, 19, 6, -0.004, 'ground3'); if (t !== SITE.token) return; look();
     say(ok > 60 ? '4K environment on: sharper ground, full-resolution drawing, finer shadows.' : '4K environment on. Some satellite images did not load; the rest are sharp.'); }
   function render4k(w = 3840, h = 2160) { const old = new T.Vector2(); renderer.getSize(old); const pr = renderer.getPixelRatio(), asp = camera.aspect;
     renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); draw();
@@ -3164,13 +3223,15 @@ SITE.root.visible = false; scene.add(SITE.root);
   // other controls re-run layout() and applyEnv(); while a site is shown, keep the studio models and the villa out and rebuild the canopies
   const baseLayout = layout; layout = function () { baseLayout.apply(this, arguments); if (SITE.on) { hideStudio(); placeProduct(); } };
   // haze on the scale of a city block (the studio haze is tuned for the villa), in day, night and FSD looks
-  const fixedFog = (near, far) => { const f = new T.Fog(0xd9e2ea, near, far); Object.defineProperty(f, 'near', { get: () => near, set() {} }); Object.defineProperty(f, 'far', { get: () => far, set() {} }); return f; };
+  const fixedFog = (near, far) => { const f = new T.Fog(0xd9e2ea, near, far), base = [near, far]; Object.defineProperty(f, 'near', { get: () => near, set() {} }); Object.defineProperty(f, 'far', { get: () => far, set() {} });
+    f.setRange = (n, fa) => { near = n; far = fa; }; f.reset = () => { [near, far] = base; }; return f; };
   const fog0 = scene.fog, siteFog = fixedFog(380, 1500), siteFsdFog = fixedFog(160, 800);
   const baseApply2 = applyEnv; applyEnv = function () {
     if (!SITE.on && (scene.fog === siteFog || scene.fog === siteFsdFog)) scene.fog = fog0;
     baseApply2.apply(this, arguments);
     if (SITE.on) { ENV.villaGroup.visible = false; ground.visible = false; if (ENV.carport) ENV.carport.visible = false;
-      const f = typeof FSD !== 'undefined' && FSD.on, col = scene.fog.color.clone(); scene.fog = f ? siteFsdFog : siteFog; scene.fog.color.copy(col); } };
+      const f = typeof FSD !== 'undefined' && FSD.on, col = scene.fog.color.clone(); scene.fog = f ? siteFsdFog : siteFog; scene.fog.color.copy(col);
+      if (LV.on) applyLive(); if (SITE.hd) fitShadow(true); } };
   // the camera stops at the real buildings instead of passing through them
   const camRay2 = new T.Raycaster();
   controls.addEventListener('change', () => { if (!SITE.on || !SITE.blds.length) return; const t = controls.target, d = camera.position.clone().sub(t), L = d.length(); if (L < 0.01) return;
@@ -3414,113 +3475,6 @@ requestAnimationFrame(tick);
 </script>
 <link rel="stylesheet" href="maplibre-gl.css">
 <link rel="stylesheet" href="twin-site.css">
-<style>
-/* ---------- interface v2: the 3D stage is the page. Title and live specs on the scene, model bar at the bottom,
-   options in a tabbed side panel (a bottom sheet on phones). Signature: the charge line fills and the specs count up on every model change. ---------- */
-.shell{padding-block:16px 80px}
-.shell>.top{display:none}
-.stage{height:max(620px,calc(100svh - 32px));border-radius:24px}
-.stage.is-full{height:100dvh}
-/* toolbar: top right */
-.stage .hud--top{left:auto;right:16px;top:16px;width:auto;justify-content:flex-end;gap:8px;flex-wrap:nowrap}
-.stage .hud--top .caption{display:none}
-/* title block: top left */
-.tw-head{position:absolute;left:16px;top:16px;max-width:min(440px,calc(100% - 32px));pointer-events:none;color:var(--fg);padding:18px 22px 18px;border-radius:20px;
-  background:rgba(255,255,255,.78);backdrop-filter:saturate(1.8) blur(22px);-webkit-backdrop-filter:saturate(1.8) blur(22px);box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.08)}
-.tw-logo{height:26px;width:auto;display:block;margin:0 0 14px -2px}
-.tw-fam{font:600 12px/1 var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:0}
-.tw-name{font:700 clamp(34px,4.2vw,58px)/1 var(--display);letter-spacing:-.04em;margin:8px 0 0}
-.tw-charge{position:relative;height:3px;width:min(240px,60%);margin:14px 0 10px;border-radius:3px;background:rgba(29,29,31,.1);overflow:hidden}
-.tw-charge::after{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(90deg,var(--b0),var(--b1));transform-origin:left;transform:scaleX(1)}
-.tw-charge.is-on::after{animation:twCharge 1.1s cubic-bezier(.22,1,.36,1) both}
-@keyframes twCharge{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-.tw-sub{font:500 13px/1.4 var(--display);color:var(--dim);margin:0}
-.tw-stats{display:flex;flex-wrap:wrap;gap:6px 22px;margin:16px 0 0;padding:0;list-style:none}
-.tw-stats li{display:flex;flex-direction:column;gap:2px;min-width:0}
-.tw-stats span{font:500 11px/1.3 var(--display);color:var(--faint);letter-spacing:.02em}
-.tw-stats b{font:600 15px/1.25 var(--display);font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap}
-/* model bar: bottom centre */
-.stage .nav.tw-models{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);gap:8px;padding:8px 10px 10px;border-radius:22px;
-  background:rgba(255,255,255,.8);backdrop-filter:saturate(1.8) blur(22px);-webkit-backdrop-filter:saturate(1.8) blur(22px);
-  box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.1);max-width:calc(100% - 32px);z-index:3}
-.tw-models .fams{gap:4px 18px}
-.tw-models .fam{font-size:13px;padding:2px 1px 5px}
-.tw-models .tabs{background:rgba(29,29,31,.06)}
-.tw-models .tab{font-size:13px;padding:7px 15px;white-space:nowrap;flex:0 0 auto}
-/* options: button and panel */
-.tw-optbtn{position:absolute;right:16px;bottom:16px;z-index:4;display:inline-flex;align-items:center;gap:8px;appearance:none;border:0;cursor:pointer;
-  font:600 13px var(--display);color:#fff;background:var(--fg);padding:11px 16px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
-.tw-optbtn svg{width:16px;height:16px}
-.tw-optbtn[aria-expanded=true]{background:linear-gradient(90deg,var(--b0),var(--b1))}
-.tw-optbtn:focus-visible,.tw-tab:focus-visible,.tw-close:focus-visible{outline:2px solid #3BA9E0;outline-offset:2px}
-.tw-panel{position:absolute;right:16px;top:68px;max-height:calc(100% - 140px);width:300px;z-index:3;display:flex;flex-direction:column;
-  background:rgba(255,255,255,.86);backdrop-filter:saturate(1.8) blur(24px);-webkit-backdrop-filter:saturate(1.8) blur(24px);
-  border-radius:20px;box-shadow:0 1px 2px rgba(0,0,0,.06),0 16px 40px rgba(0,0,0,.12);overflow:hidden;
-  transition:opacity .22s ease-out,transform .22s ease-out}
-.tw-panel[data-open=false]{opacity:0;transform:translateX(16px);pointer-events:none;visibility:hidden;transition:opacity .18s,transform .18s,visibility 0s .18s}
-.tw-phead{display:flex;align-items:center;gap:8px;padding:12px 12px 8px 16px}
-.tw-phead h3{font:700 15px var(--display);letter-spacing:-.02em;margin:0;flex:1}
-.tw-close{appearance:none;border:0;background:rgba(29,29,31,.06);width:28px;height:28px;border-radius:50%;cursor:pointer;color:var(--fg);font:500 16px/1 var(--display)}
-.tw-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:0 12px 10px;border-bottom:1px solid var(--line)}
-.tw-tabs::-webkit-scrollbar{display:none}
-.tw-tab{appearance:none;border:0;background:none;font:500 12px var(--display);color:var(--dim);padding:6px 10px;border-radius:999px;cursor:pointer;white-space:nowrap}
-.tw-tab[aria-selected=true]{background:var(--fg);color:#fff}
-.tw-tab[hidden]{display:none}
-.tw-pbody{flex:1;overflow-y:auto;padding:8px 8px 12px;scrollbar-width:thin}
-.tw-panel .dock{flex-direction:column!important;gap:0}
-.tw-panel .dock-sec{background:none!important;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0;border-radius:0}
-.tw-panel .dock-sec:not(.is-active){display:none}
-.tw-panel .dock-sec>h4{display:none}
-.tw-panel .dock .dock-row{flex-direction:column!important;flex-wrap:nowrap}
-.tw-panel .dock .opt{width:100%!important;justify-content:flex-start;padding:9px 10px 9px 8px;border-radius:12px}
-.tw-panel .dock-sec h5{margin:10px 8px 2px}
-/* help hint */
-.tw-help{position:absolute;left:24px;bottom:22px;z-index:2;font:500 12px var(--display);color:var(--dim);background:rgba(255,255,255,.72);
-  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding:7px 12px;border-radius:999px;pointer-events:none;transition:opacity .4s}
-.tw-help.is-gone{opacity:0}
-/* intro under the stage */
-.tw-about{background:var(--panel);border-radius:28px;padding:28px 32px;display:grid;gap:8px}
-.tw-about h1{font-size:clamp(28px,3vw,40px)}
-.tw-about .lede{margin:6px 0 0;text-align:left;max-width:40em;font-size:17px}
-.tw-about .kicker{margin:0}
-/* night */
-.stage.is-night .tw-head{color:#f5f5f7}
-.stage.is-night .tw-logo{filter:brightness(0) invert(1)}
-.stage.is-night .ctl[aria-pressed=true]{background:#f5f5f7;color:#1d1d1f}
-.stage.is-night .tw-fam,.stage.is-night .tw-sub{color:#a1a1a6}
-.stage.is-night .tw-stats span{color:#8e8e93}
-.stage.is-night .tw-charge{background:rgba(255,255,255,.14)}
-.stage.is-night .tw-head,.stage.is-night .tw-models,.stage.is-night .tw-panel{background:rgba(28,30,34,.78);color:#e8e8ed}
-.stage.is-night .tw-models .fam{color:#a1a1a6}.stage.is-night .tw-models .fam[aria-selected=true]{color:#fff;border-bottom-color:#fff}
-.stage.is-night .tw-models .tab{color:#d1d1d6}.stage.is-night .tw-models .tab[aria-selected=true]{background:#3a3a3c;color:#fff}
-.stage.is-night .tw-models .tabs{background:rgba(255,255,255,.08)}
-.stage.is-night .tw-tab{color:#a1a1a6}.stage.is-night .tw-tab[aria-selected=true]{background:#f5f5f7;color:#1d1d1f}
-.stage.is-night .tw-close{background:rgba(255,255,255,.1);color:#f5f5f7}
-.stage.is-night .tw-help{background:rgba(28,30,34,.72);color:#a1a1a6}
-.stage.is-night .tw-optbtn{background:#f5f5f7;color:#1d1d1f}
-.stage.is-night .tw-phead h3{color:#f5f5f7}
-/* medium screens: the panel starts closed */
-@media (max-width:1100px){.tw-stats{display:none}}
-/* phones */
-@media (max-width:760px){
-  .shell{padding-block:8px 56px}
-  .stage{height:max(560px,calc(100svh - 16px));border-radius:20px}
-  .stage .hud--top{left:0;right:0;top:10px;padding:0 10px;justify-content:flex-start;overflow-x:auto}
-  .tw-head{left:10px;top:58px;padding:12px 16px;max-width:calc(100% - 20px)}
-  .tw-logo{display:none}
-  .tw-name{font-size:32px}
-  .tw-charge{margin:10px 0 6px}
-  .stage .nav.tw-models{left:10px;right:10px;transform:none;bottom:66px;max-width:none;overflow-x:auto;align-items:flex-start;padding:8px}
-  .tw-models .fams{flex-wrap:nowrap;justify-content:flex-start}
-  .tw-models .tabs{flex-wrap:nowrap}
-  .tw-optbtn{left:10px;right:10px;bottom:12px;justify-content:center}
-  .tw-panel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:none;height:min(64%,520px);border-radius:20px 20px 0 0;z-index:5}
-  .tw-panel[data-open=false]{transform:translateY(24px)}
-  .tw-help{display:none}
-  .tw-about{padding:22px 20px}
-}
-@media (prefers-reduced-motion:reduce){.tw-charge.is-on::after{animation:none}.tw-panel{transition:none}}
-</style>
 <script>
 (() => {
   const stage = document.getElementById('stage'); if (!stage) return;
