@@ -110,3 +110,6 @@
     S.cableDXF = () => C.res ? C.res.runs.map(r => ({ name: r.t.name, pts: r.pts })) : [];
   }
 })();
+// the ruler lives in its own file next to this one
+(() => { if (document.querySelector('script[src*="twin-measure"]')) return; const me = document.currentScript, s = document.createElement('script');
+  s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, 'twin-measure.js'); document.head.appendChild(s); })();
