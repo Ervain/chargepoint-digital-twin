@@ -324,7 +324,7 @@
       const ids = ['lv-blk', 'lv-row', 'lv-bay', 'lv-ev', 'lv-evl', 'lv-aisle', 'lv-hov'];
       const add = () => { ids.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); }); ['lv-k', 'lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
         map.addSource('lv-k', { type: 'geojson', data: fc((out.blocks || []).map(r => r), 'LineString') });
-        map.addLayer({ id: 'lv-blk', type: 'line', source: 'lv-k', paint: { 'line-color': '#8DC63F', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.9 } });
+        map.addLayer({ id: 'lv-blk', type: 'line', source: 'lv-k', paint: { 'line-color': '#8DC63F', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0 } });
         map.addSource('lv-r', { type: 'geojson', data: fc(out.rows, 'Polygon') }); map.addSource('lv-b', { type: 'geojson', data: fc([], 'Polygon') });
         map.addSource('lv-e', { type: 'geojson', data: fc([], 'Polygon') }); map.addSource('lv-a', { type: 'geojson', data: fc(out.aisles, 'LineString') }); map.addSource('lv-h', { type: 'geojson', data: fc([], 'Polygon') });
         map.addLayer({ id: 'lv-row', type: 'fill', source: 'lv-r', paint: { 'fill-color': '#0b0f16', 'fill-opacity': 0.35 } });

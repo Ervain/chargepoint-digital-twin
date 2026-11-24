@@ -28,8 +28,19 @@
       const r = cv.getBoundingClientRect(), ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), A.camera);
       const p = new T.Vector3(); if (!ray.ray.intersectPlane(new T.Plane(new T.Vector3(0, 1, 0), 0), p)) return;
       C.src = [p.x, p.z]; C.picking = false; cv.style.cursor = ''; route(); });
-    b.addEventListener('click', () => { if (!S.on || !S.product) return; C.picking = true; cv.style.cursor = 'crosshair';
-      A.say(C.src ? 'Click the ground to move the power source (main board or transformer).' : 'Click the ground where the power comes from: the main board, the substation or the transformer.'); });
+    // pressing the button routes at once: from the point you set, or else from an assumed source on the nearest mapped road edge
+    // (where a supply usually arrives). A click on the ground then moves the source and re-routes.
+    function defaultSrc() { const tg = targets(); if (!tg.length) return null; const cx = tg.reduce((a, t) => a + t.x, 0) / tg.length, cz = tg.reduce((a, t) => a + t.z, 0) / tg.length;
+      const far = (x, z) => tg.every(t => Math.hypot(x - t.x, z - t.z) > 9); let best = null, bd = 1e9;
+      (S.roads || []).forEach(m => { const a = m.geometry.attributes.position.array; for (let i = 0; i < a.length; i += 3) { const x = a[i], z = a[i + 2], d = Math.hypot(x - cx, z - cz); if (d < bd && d < 150 && far(x, z)) { bd = d; best = [x, z]; } } });
+      if (best) return { p: best, how: 'the nearest mapped road edge' };
+      const xs = tg.map(t => t.x), zs = tg.map(t => t.z); return { p: [Math.min(...xs) - 12, Math.min(...zs) - 12], how: 'a corner 12 m from the canopies' }; }
+    b.addEventListener('click', () => { if (!S.on || !S.product) { A.say('Build the site first, then press Cable routing.'); return; }
+      C.picking = true; cv.style.cursor = 'crosshair';
+      if (!C.src) { const d = defaultSrc(); if (d) { C.src = d.p; route(); setTimeout(() => A.say(`Cables routed from an assumed source at ${d.how} (the orange box). Click the ground to put it on the real main board, substation or transformer.`), 1200); return; } }
+      else route();
+      A.say('Click the ground to move the power source (main board or transformer).'); });
+    C.route = () => { if (C.src && C.res) route(); };
 
     // ---- the canopies to feed: centre of each unit in the 3D scene ----
     function targets() { const P = S.product; if (!P) return []; P.updateMatrixWorld(true);
@@ -111,5 +122,5 @@
   }
 })();
 // the ruler lives in its own file next to this one
-(() => { if (document.querySelector('script[src*="twin-measure"]')) return; const me = document.currentScript, s = document.createElement('script');
-  s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, 'twin-measure.js'); document.head.appendChild(s); })();
+(() => { const me = document.currentScript; ['twin-measure', 'twin-move'].forEach(n => { if (document.querySelector(`script[src*="${n}"]`)) return; const s = document.createElement('script');
+  s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, n + '.js'); document.head.appendChild(s); }); })();
