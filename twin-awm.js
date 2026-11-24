@@ -23,16 +23,11 @@
       m.color.set(0x55585b); m.needsUpdate = true; }
 
     // ---- 2. walls: fine plaster relief and the grime a basement wall collects near the floor ----
-    E.children.filter(o => o.isMesh && o.geometry.type === 'PlaneGeometry' && Math.abs(o.geometry.parameters.height - CEIL) < 0.01 && o.material.map && o.material.color.getHex() === 0xece5d4)
+    E.children.filter(o => o.isMesh && o.geometry.type === 'PlaneGeometry' && Math.abs(o.geometry.parameters.height - CEIL) < 0.01 && o.material.map && o.material.color.getHex() === 0xece5d4 && Math.abs(o.geometry.parameters.width - 60) > 0.01)
       .forEach(o => { const m = o.material; m.bumpMap = canvasTex(512, 512, (c, w, h) => noise(c, w, h, [[16, 0.6], [64, 0.5], [256, 0.4]], 128, 0.6), [o.geometry.parameters.width / 2, 2]); m.bumpScale = 0.01; m.needsUpdate = true; });
     const grime = new T.MeshBasicMaterial({ map: canvasTex(16, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(40,34,26,0)'); g.addColorStop(0.75, 'rgba(40,34,26,.22)'); g.addColorStop(1, 'rgba(30,26,20,.45)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }), transparent: true, depthWrite: false });
     const G = new T.Group(); E.add(G);
-    // the back wall is matt black from end to end, so the charging wall reads as one dark surface (owner's choice); no grime band on it
-    // the whole back wall takes the feature wall's own surface (same near-black field, grain and glow), so the two meet without a seam
-    { const bw = find(plane(60, CEIL)), fw = find(plane(2 * BW + 0.5, CEIL)), fm = fw && fw.material;
-      if (bw) { const tile = canvasTex(512, 512, (c, w, h) => { c.fillStyle = '#0b0b0c'; c.fillRect(0, 0, w, h); let q = 9; const r = () => (q = (q * 16807) % 2147483647) / 2147483647;
-          for (let i = 0; i < 2600; i++) { c.fillStyle = r() < 0.5 ? 'rgba(255,255,255,.03)' : 'rgba(0,0,0,.06)'; c.fillRect(r() * w, r() * h, 2, 2); } }, [60 / ((2 * BW + 0.5) / 8), CEIL / (CEIL / 4.63)], true);
-        bw.material = new T.MeshStandardMaterial({ map: tile, color: 0xffffff, roughness: fm ? fm.roughness : 0.85, metalness: fm ? fm.metalness : 0.05, emissive: 0xffffff, emissiveMap: tile, emissiveIntensity: fm ? fm.emissiveIntensity : 0.55 }); } }
+    // the back wall either side of the artwork keeps its original cream plaster, untouched (owner's choice)
     const LX = -BW - 1.3, gl = new T.Mesh(new T.PlaneGeometry(15, 0.7), grime); gl.rotation.y = Math.PI / 2; gl.position.set(LX + 0.003, 0.35, WALL + 7.5); G.add(gl);
 
     // ---- 3. ceiling: board-marked concrete soffit, downstand beams every 5.2 m, and linear LED fittings ----
@@ -69,13 +64,13 @@
 
     // ---- 5b. the ChargePoint logo on the black wall, centred above the screen (screen top 1.75 m, header line from 2.33 m) ----
     { const LW = 1.4, LH = LW * 512 / 2048, cv = document.createElement('canvas'); cv.width = 2048; cv.height = 512; const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8;
-      const lm = new T.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -16 });
+      const lm = new T.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -16 });
       const lg = new T.Mesh(new T.PlaneGeometry(LW, LH), lm); lg.position.set(0, 2.04, WALL + 0.012); lg.renderOrder = 3; G.add(lg);
       const paint = () => { const P = H.logo && H.logo(); if (!P || !P.mark || !P.word) { setTimeout(paint, 200); return; } const c = cv.getContext('2d'); c.clearRect(0, 0, 2048, 512);
         let mh = 300, wh = 120, gap = 60; const mr = P.mark.width / P.mark.height, wr = P.word.width / P.word.height, k = Math.min(1, 1880 / (mh * mr + gap + wh * wr)); mh *= k; wh *= k; gap *= k;   // fit inside the panel
         const mw = mh * mr, ww = wh * wr, x0 = 1024 - (mw + gap + ww) / 2, cy = 256;
-        c.shadowColor = 'rgba(191,233,255,.75)'; c.shadowBlur = 40; c.drawImage(P.mark, x0, cy - mh / 2, mw, mh); c.drawImage(P.word, x0 + mw + gap, cy - wh / 2, ww, wh);   // the backlit glow, as on the sign above
-        c.shadowBlur = 0; c.drawImage(P.mark, x0, cy - mh / 2, mw, mh); c.drawImage(P.word, x0 + mw + gap, cy - wh / 2, ww, wh); tex.needsUpdate = true; A.draw(); };
+        // printed on the wall, not lit (owner): no glow, a touch below full white
+        c.globalAlpha = 0.88; c.drawImage(P.mark, x0, cy - mh / 2, mw, mh); c.drawImage(P.word, x0 + mw + gap, cy - wh / 2, ww, wh); c.globalAlpha = 1; tex.needsUpdate = true; A.draw(); };
       paint(); }
 
     // ---- 6. cars: Add car fills the charging bays first (01, 02), then the bays beside them; Clear cars empties them ----
