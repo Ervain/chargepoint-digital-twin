@@ -152,13 +152,41 @@
   const coveredShare = (box, poly) => overlapArea(box, poly) / (area(box) || 1);
 
 
+
+  // ---- 9. AHP (Saaty): criterion weights from pairwise judgements. w = principal eigenvector of the comparison matrix A (power iteration),
+  //      λmax from A·w = λ·w, consistency index CI = (λmax − n)/(n − 1), consistency ratio CR = CI / RI(n); judgements are acceptable when CR < 0.10.
+  const RI = [0, 0, 0, 0.58, 0.90, 1.12, 1.24, 1.32, 1.41, 1.45, 1.49];
+  function ahp(A) { const n = A.length; let w = new Array(n).fill(1 / n);
+    for (let it = 0; it < 200; it++) { const v = A.map(r => r.reduce((s, a, j) => s + a * w[j], 0)), t = v.reduce((a, b) => a + b, 0); const nw = v.map(x => x / t);
+      const d = nw.reduce((s, x, i) => s + Math.abs(x - w[i]), 0); w = nw; if (d < 1e-12) break; }
+    const Aw = A.map(r => r.reduce((s, a, j) => s + a * w[j], 0)), lmax = Aw.reduce((s, x, i) => s + x / w[i], 0) / n, CI = n > 2 ? (lmax - n) / (n - 1) : 0;
+    return { w, lmax, CI, CR: n > 2 ? CI / RI[n] : 0 }; }
+  // ---- 10. TOPSIS (Hwang and Yoon): rows are sites, columns criteria (all "more is better" here). Vector-normalise each column,
+  //      weight it, find the ideal best A⁺ and worst A⁻, and rank by closeness C = d⁻ / (d⁺ + d⁻), 0..1.
+  function topsis(X, w) { const m = X.length, n = w.length; if (!m) return [];
+    const norm = []; for (let j = 0; j < n; j++) norm.push(Math.sqrt(X.reduce((s, r) => s + r[j] * r[j], 0)) || 1);
+    const V = X.map(r => r.map((x, j) => w[j] * x / norm[j])), best = [], worst = [];
+    for (let j = 0; j < n; j++) { best.push(Math.max(...V.map(r => r[j]))); worst.push(Math.min(...V.map(r => r[j]))); }
+    return V.map(r => { const dp = Math.sqrt(r.reduce((s, v, j) => s + (v - best[j]) ** 2, 0)), dm = Math.sqrt(r.reduce((s, v, j) => s + (v - worst[j]) ** 2, 0)); return dp + dm ? dm / (dp + dm) : 0; }); }
+  // ---- 11. how much the ranking depends on the weights: N random weight sets drawn around w (each weight × a log-normal factor, σ = 0.35,
+  //      renormalised), TOPSIS re-run each time; returns for every site the share of draws in which it came first and its median rank.
+  function rankStability(X, w, N, seed) { let s = seed || 7; const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return (s + 0.5) / 4294967296; };
+    const gauss = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd()), m = X.length, first = new Array(m).fill(0), ranks = X.map(() => []);
+    for (let k = 0; k < (N || 400); k++) { let ww = w.map(x => x * Math.exp(0.35 * gauss())); const t = ww.reduce((a, b) => a + b, 0); ww = ww.map(x => x / t);
+      const c = topsis(X, ww), order = c.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]); first[order[0][1]]++; order.forEach(([, i], r) => ranks[i].push(r + 1)); }
+    return X.map((_, i) => { const r = ranks[i].sort((a, b) => a - b); return { first: first[i] / (N || 400), median: r[r.length >> 1] }; }); }
+  // Site Radar judgements (Saaty 1–9 scale): row criterion compared with column criterion. A starting expert view, meant to be confirmed by the team:
+  // demand matters most; the charging gap and car park size next; main road, anchors and grid least.
+  const RADAR_C = ['demand', 'gap', 'size', 'road', 'anchors', 'grid'];
+  const RADAR_AHP = [[1, 2, 2, 3, 3, 3], [1 / 2, 1, 1, 2, 2, 2], [1 / 2, 1, 1, 2, 2, 2], [1 / 3, 1 / 2, 1 / 2, 1, 1, 1], [1 / 3, 1 / 2, 1 / 2, 1, 1, 1], [1 / 3, 1 / 2, 1 / 2, 1, 1, 1]];
+
   // ---- 8. Site Radar scoring: every car park scored as a charging site by a weighted linear combination of six criteria ----
   //  demand  : adaptive-bandwidth KDE of destinations weighted by how long drivers stay there (k = 6 nearest neighbours)
   //  anchors : gravity pull Σ P / d² of big anchors (malls, hotels, stadiums, hospitals …), d floored at 60 m
   //  gap     : distance to the nearest mapped charger      road : distance to a motorway, trunk or primary road
   //  grid    : distance to the nearest mapped substation (left out when none is mapped)   size : spaces in the car park
   //  All distances in metres on the local tangent plane around the view (accurate to < 0.5% over 1.5 km anywhere on Earth).
-  const RADAR_W = { demand: 0.25, anchors: 0.10, gap: 0.20, road: 0.15, grid: 0.10, size: 0.20 };
+  const RADAR_A = ahp(RADAR_AHP), RADAR_W = {}; RADAR_C.forEach((c, i) => { RADAR_W[c] = RADAR_A.w[i]; });
   function radar(lots, raw, ctx) { if (!lots.length) return lots; const DEST_W = ctx.DEST_W, DEST_N = ctx.DEST_N;
     const lat0 = lots.reduce((a, l) => a + l.lat, 0) / lots.length, lon0 = lots.reduce((a, l) => a + l.lon, 0) / lots.length, F = frame(lon0, lat0), L = (lo, la) => F.toLocal(lo, la);
     const dest = raw.dest.map(p => ({ xy: L(p.c[0], p.c[1]), w: DEST_W[p.k] || DEST_W[p.cl] || 0, k: p.k })).filter(p => p.w > 0);
@@ -166,7 +194,7 @@
     const segs = []; raw.roads.forEach(r => { const G = r.g.type === 'LineString' ? [r.g.coordinates] : r.g.type === 'MultiLineString' ? r.g.coordinates : []; G.forEach(l => { for (let i = 0; i < l.length - 1; i++) segs.push([L(l[i][0], l[i][1]), L(l[i + 1][0], l[i + 1][1]), r.w]); }); });
     const subs = (raw.subs || []).map(q => L(q.lon, q.lat)), ch = raw.chargers.map(c => ({ xy: L(c.lon, c.lat), name: c.name }));
     const clamp = v => Math.round(Math.max(0, Math.min(100, v)));
-    return lots.map(l => { const x = L(l.lon, l.lat);
+    const scored = lots.map(l => { const x = L(l.lon, l.lat);
       const D = kdeAdaptive(x, dest, hs) * 2 * Math.PI * 250 * 250, g = gravity(x, anchors, 2, 60) * 3600;
       let road = 1e9; segs.forEach(([a, b, w]) => { const m = snapToSegment(x, a, b).d / w; if (m < road) road = m; });
       let near = 1e9, nearName = '', n1 = 0; ch.forEach(c => { const m = len(x, c.xy); if (m < near) { near = m; nearName = c.name; } if (m < 1000) n1++; });
@@ -174,14 +202,21 @@
       let nd = 0; const kinds = {}; dest.forEach(p => { if (len(x, p.xy) < 400) { nd++; kinds[p.k] = (kinds[p.k] || 0) + 1; } });
       const spaces = l.area ? Math.round(l.area / 25) : 0;
       const X = { demand: clamp(100 * Math.log1p(D) / Math.log1p(400)), anchors: clamp(100 * Math.log1p(g) / Math.log1p(12)), gap: near > 1e8 ? 100 : clamp(near / 20),
-        road: road > 1e8 ? 0 : clamp(100 * (1 - (road - 120) / 1400)), grid: subs.length ? clamp(100 * (1 - (sub - 300) / 2700)) : null, size: clamp(spaces / 3) };
-      const score = Math.round(wlc(X, RADAR_W));
-      const f = { dwell: X.demand, gap: X.gap, road: X.road, size: X.size, anchors: X.anchors, grid: X.grid };
-      const fx = [['Demand', X.demand], ['Anchors', X.anchors], ['Charging gap', X.gap], ['Main road', X.road]].concat(X.grid === null ? [] : [['Grid', X.grid]], [['Size', X.size]]);
+        road: road > 1e8 ? 0 : clamp(100 * (1 - (road - 120) / 1400)), grid: subs.length ? clamp(100 * (1 - (sub - 300) / 2700)) : null, size: spaces ? clamp(spaces / 3) : null };   // unmapped size is unknown, not zero
+      const score = Math.round(wlc(X, RADAR_W));   // replaced below by the TOPSIS closeness once every site is known
+      const f = { dwell: X.demand, gap: X.gap, road: X.road, size: X.size || 0, anchors: X.anchors, grid: X.grid };
+      const fx = [['Demand', X.demand], ['Anchors', X.anchors], ['Charging gap', X.gap], ['Main road', X.road]].concat(X.grid === null ? [] : [['Grid', X.grid]], X.size === null ? [] : [['Size', X.size]]);
       const kind = f.road >= 70 && f.dwell < 55 ? 'dc' : 'ac', bays = Math.max(4, Math.min(40, Math.round((spaces || 120) * 0.03 / 2) * 2));
       const top = Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, c]) => { const nm = DEST_N[n] || [n.replace(/_/g, ' '), n.replace(/_/g, ' ') + 's']; return `${c} ${c === 1 ? nm[0] : nm[1]}`; }).join(', ');
-      return Object.assign(l, { score, f, fx, kind, bays, spaces, nd, top, near: near > 1e8 ? null : Math.round(near), nearName, n1, sub: sub > 1e8 ? null : Math.round(sub) });
-    }).sort((a, b) => b.score - a.score); }
+      return Object.assign(l, { score, X, f, fx, kind, bays, spaces, nd, top, near: near > 1e8 ? null : Math.round(near), nearName, n1, sub: sub > 1e8 ? null : Math.round(sub) });
+    }).map((l, _, all) => l);
+    // rank: TOPSIS over the criteria every site has data for (grid drops out when no substation is mapped), weights from AHP renormalised
+    // a criterion known for at least half the sites is kept, its gaps filled with the median of the known values; otherwise it is left out
+    const cols = RADAR_C.filter(c => scored.filter(l => l.X[c] !== null).length >= Math.max(1, scored.length / 2)), w0 = cols.map(c => RADAR_W[c]), ws = w0.reduce((a, b) => a + b, 0), w = w0.map(x => x / ws);
+    const medOf = c => { const v = scored.map(l => l.X[c]).filter(x => x !== null).sort((a, b) => a - b); return v[v.length >> 1]; }, fill = {}; cols.forEach(c => { fill[c] = medOf(c); });
+    const M2 = scored.map(l => cols.map(c => (l.X[c] === null ? fill[c] : l.X[c]) + 1)), C = topsis(M2, w), stab = scored.length > 1 ? rankStability(M2, w, 400) : scored.map(() => ({ first: 1, median: 1 }));
+    scored.forEach((l, i) => { l.wlc = l.score; l.score = scored.length > 1 ? Math.round(100 * C[i]) : l.wlc; l.stab = stab[i]; l.method = { cols, w: w.map(x => +x.toFixed(3)), CR: +RADAR_A.CR.toFixed(3) }; });
+    return scored.sort((a, b) => b.score - a.score || b.wlc - a.wlc); }
 
   // ---- 4. validation ----
   const SEV = ['Valid', 'Info', 'Warning', 'Review', 'Critical'];
@@ -217,9 +252,15 @@
     ok('Adaptive bandwidth: tight in a cluster, wide when isolated', hs[0] < 15 && hs[4] > 400, hs.map(h => Math.round(h)));
     const box = [[0, 0], [4, 0], [4, 4], [0, 4]], L = [[2, 2], [10, 2], [10, 10], [6, 10], [6, 6], [2, 6]];
     ok('Sutherland–Hodgman on an L-shaped building: overlap 4 m² of a 16 m² bay, IoU 4 / 60', Math.abs(overlapArea(box, L) - 4) < 1e-9 && Math.abs(iou(box, L) - 4 / 60) < 1e-9, [overlapArea(box, L), iou(box, L)]);
+    const ah = ahp(RADAR_AHP);
+    ok('AHP weights sum to 1 and the judgements are consistent (CR < 0.10)', Math.abs(ah.w.reduce((a, b) => a + b, 0) - 1) < 1e-9 && ah.CR < 0.1, { w: ah.w.map(x => +x.toFixed(3)), CR: +ah.CR.toFixed(4) });
+    const ahC = ahp([[1, 2, 4], [1 / 2, 1, 2], [1 / 4, 1 / 2, 1]]);
+    ok('AHP on a perfectly consistent matrix: weights 4/7, 2/7, 1/7 and CR = 0', Math.abs(ahC.w[0] - 4 / 7) < 1e-9 && Math.abs(ahC.CR) < 1e-9);
+    const tp = topsis([[10, 10], [0, 0], [5, 5]], [0.5, 0.5]);
+    ok('TOPSIS: the best site scores 1, the worst 0, the middle 0.5', Math.abs(tp[0] - 1) < 1e-9 && tp[1] < 1e-9 && Math.abs(tp[2] - 0.5) < 1e-9, tp);
     return R; }
 
   root.TwinGeo = { frame, haversine, len, polyLength, area, signedArea, perimeter, centroid, rect, rot, pointInPoly, segIntersect, polysIntersect, contains, satOverlap,
     snapToSegment, distPointPoly, distPolyPoly, distPolyLine, snapGrid, snapAngle, bearing, offsetSeg, parking, SEV, issue, selfTest,
-    convexHull, minAreaRect, houghAngles, lineDir, angDiff, kde, gravity, wlc, coverShare, adaptiveBandwidths, kdeAdaptive, clipConvex, earTriangles, overlapArea, iou, coveredShare, radar, RADAR_W };
+    convexHull, minAreaRect, houghAngles, lineDir, angDiff, kde, gravity, wlc, coverShare, adaptiveBandwidths, kdeAdaptive, clipConvex, earTriangles, overlapArea, iou, coveredShare, radar, RADAR_W, ahp, topsis, rankStability, RADAR_AHP, RADAR_C };
 })(typeof window !== 'undefined' ? window : globalThis);

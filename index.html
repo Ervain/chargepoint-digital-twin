@@ -2880,11 +2880,11 @@ card.innerHTML = `<div class="tw-bd-top"><span class="tw-bd-rank">${i + 1}</span
 card.querySelector('.tw-bd-name b').textContent = l.label; card.querySelector('.tw-bd-name span').textContent = `${l.kind === 'dc' ? 'DC fast · Halo Ray' : 'AC · Halo'} · start with ${l.bays} bays`;
 card.querySelector('.tw-bd-why').textContent = [l.nd ? `${l.nd} destinations within 400 m${l.top ? ' (' + l.top + ')' : ''}` : 'Few mapped destinations nearby',
 l.near !== null ? `nearest mapped charger ${l.near >= 1000 ? (l.near / 1000).toFixed(1) + ' km' : l.near + ' m'} (${l.nearName})` : 'no mapped charger nearby', l.spaces ? `about ${l.spaces} spaces` : ''].filter(Boolean).join(' · ') + '.';
-card.querySelector('.tw-bd-go span').textContent = i === 0 ? 'Best site in this view' : '';
+card.querySelector('.tw-bd-go span').textContent = (i === 0 ? 'Best site in this view. ' : '') + (l.stab && ranked.length > 1 ? `First in ${Math.round(l.stab.first * 100)}% of 400 weight variations, median rank ${l.stab.median}.` : '');
 card.addEventListener('click', ev => { if (ev.target.closest('.tw-bd-build')) return; focusRank(i); });
 card.querySelector('.tw-bd-build').addEventListener('click', () => buildRank(i)); bd.appendChild(card); });
 const note = document.createElement('p'); note.className = 'tw-bd-note';
-note.textContent = 'Score = weighted sum of: demand (adaptive kernel density of destinations), anchors (gravity pull of malls, hotels and similar), charging gap, main-road access, distance to a mapped substation and car park size, all from OpenStreetMap. A criterion with no data is left out and the weights rescaled. An index for choosing sites, not a revenue forecast. Bays: a starting rule of 3% of spaces.';
+const md = ranked[0].method || { cols: [], w: [], CR: 0 }; note.textContent = `Ranked by TOPSIS (closeness to the ideal site, 0 to 100) over: ${md.cols.map((c, k) => `${c} ${Math.round(md.w[k] * 100)}%`).join(', ')}. Weights from pairwise expert judgements (AHP, consistency ratio ${md.CR}, acceptable below 0.10); a criterion with no data is left out. Stability: each ranking is re-run with 400 random weight variations. Demand is an adaptive kernel density of destinations, anchors a gravity pull, all from OpenStreetMap. An index for choosing sites, not a revenue forecast. Bays: a starting rule of 3% of spaces.`;
 bd.appendChild(note); bd.hidden = false; focusRank(0, true);
 hint(`Best site here: ${ranked[0].label}, score ${ranked[0].score}. Press Build here, or pick another from the ranking.`);
 }
