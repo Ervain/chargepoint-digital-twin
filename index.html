@@ -1881,7 +1881,7 @@ window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () =>
     const paintHead = () => { if (!cpParts.mark || !cpParts.word) { setTimeout(paintHead, 150); return; }
       const p = hc.getContext('2d'); p.clearRect(0, 0, 2048, 400);
       const mh = 84, mw = mh * 320 / 286, wh = 45, ww = wh * 1100 / 86, gap = 30, x0 = 1024 - (mw + gap + ww) / 2, cy = 172;   // about 80 per cent of the capsule's width, with clear air above it
-      p.globalAlpha = 0.86; p.drawImage(cpParts.mark, x0, cy - mh / 2, mw, mh); p.drawImage(cpParts.word, x0 + mw + gap, cy - wh / 2, ww, wh); p.globalAlpha = 1;   // printed, not lit: no glow, a touch below full white
+      // (the logo that sat here was removed by the owner: the logo above the screen is the wall's one logo)
       // the line as a capsule, read like a prompt: + Plug in | Come back full. A brand-gradient cursor, and a beam of light spilling from it
       { const F = '"Helvetica Neue",Helvetica,Arial,sans-serif', FS = 64, PH2 = 124, t1 = 'Plug in', t2 = 'Come back full.';
         // measure first, then size the capsule to hug its content with equal padding left and right, centred under the logo
