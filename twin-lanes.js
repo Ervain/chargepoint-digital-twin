@@ -490,6 +490,30 @@
       quiet = true; $('.tw-spots').value = 4; quiet = false;
       if (p.rot === undefined) A.setPin(p.lat, p.lon, p.name || null, Object.assign({}, p, { rot: LVS.nearest.rot }));
       $('.tw-build').click(); COVER.starting = false; applyCover(); });
+    // ---- the same cover, from the 3D site panel after Build: this car park, or every car park around the site ----
+    { const rotL = A.bar.querySelector('.tw-rot').closest('label'), row = document.createElement('div'); row.className = 'tw-sb-row tw-coverbar';
+      row.innerHTML = '<span>Cover</span><button type="button" data-c="one" title="Put canopies along every parking row of this car park, staying inside it">▦ Whole car park</button>'
+        + '<button type="button" data-c="all" title="Read every car park around the site and put canopies along all their rows">▦ All car parks</button>';
+      const st = document.createElement('style'); st.textContent = `.tw-coverbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.tw-coverbar>span{min-width:38px}
+.tw-coverbar button{appearance:none;border:0;border-radius:999px;background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff;font:700 12px var(--display,Helvetica);padding:7px 12px;cursor:pointer}
+.tw-coverbar button:disabled{opacity:.5;cursor:default}`; document.head.appendChild(st);
+      rotL.after(row);
+      let busy = false; const btns = () => row.querySelectorAll('button');
+      row.addEventListener('click', async e => { const b = e.target.closest('button'); if (!b || busy) return; const p = A.pin(), map = A.map();
+        if (!p || !map) { A.say('Pick a site on the map and build it first.'); return; }
+        busy = true; btns().forEach(x => { x.disabled = true; }); const label = b.textContent;
+        try {
+          if (b.dataset.c === 'all') { b.textContent = 'Reading car parks…'; A.say('Reading every car park around the site. This takes about a minute…');
+            map.jumpTo({ center: [p.lon, p.lat], zoom: Math.min(map.getZoom(), 16.3) < 15 ? 16.3 : Math.min(map.getZoom(), 16.3) }); await new Promise(r => setTimeout(r, 1500));
+            await runAll(); }
+          else if (!LVS || !LVS.runs.length || (LVS.lot && p.lot && LVS.lot.label !== p.lot.label)) { b.textContent = 'Reading the car park…'; A.say('Reading this car park from the satellite photo…');
+            map.jumpTo({ center: [p.lon, p.lat], zoom: Math.max(map.getZoom(), 17) }); await new Promise(r => setTimeout(r, 800));
+            await detect(map, [p.lon, p.lat], p); }
+          if (!LVS || !LVS.runs.length) { A.say('No parking rows could be read here, so there is nothing to cover. Try Lane Vision on the map, or move the pin onto the car park.'); return; }
+          b.textContent = 'Placing canopies…'; cvBtn.click();
+        } catch (err) { A.say('The car park could not be read. Try again in a moment.'); }
+        finally { busy = false; btns().forEach(x => { x.disabled = false; }); b.textContent = label; } }); }
+
     // three.js copies userData as JSON, which fails on the scene's links between parts; clone without it, then share it back
     function cloneUnit(src) { const keep = []; src.traverse(o => { keep.push(o.userData); o.userData = {}; });
       let c; try { c = src.clone(true); } finally { let i = 0; src.traverse(o => { o.userData = keep[i++]; }); }
@@ -524,7 +548,9 @@
           plan.push({ x, z, th, name, poly, c, thL }); } });
       issues.push(G.issue(1, 'source', ['all'], 'Positions read from satellite imagery, not surveyed', 'imagery', 'site survey before construction'));
       COVER.issues = issues;
-      const cap = 80; if (plan.length > cap) plan.length = cap;
+      // at most 150 canopies in 3D (more slows the view): the ones nearest the pin first, and the check says how many more would fit
+      const cap = 150, fitAll = plan.length; if (plan.length > cap) { plan.sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z)); plan.length = cap;
+        issues.push(G.issue(1, 'limit', ['all'], `Showing the ${cap} canopies nearest the pin; ${fitAll - cap} more pass the checks and would fit`, `${fitAll} fit`, `${cap} shown`)); }
       // build the units
       const tplCopy = tpl; P.clear(); const slots = [];
       plan.forEach(R => { const c = cloneUnit(tplCopy); c.rotation.set(0, R.th, 0);
