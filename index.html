@@ -3404,7 +3404,8 @@ pform.innerHTML = '<form class="tw-pf"><div class="tw-pf-head"><h3>Create propos
 stageEl.appendChild(pform);
 const F = pform.querySelector('form'), pst = t => { pform.querySelector('.tw-pf-status').textContent = t; };
 pform.querySelector('.tw-close').addEventListener('click', () => { pform.hidden = true; });
-$b('.tw-prop').addEventListener('click', () => { if (!SITE.on) return;
+window.__twinProposalOpen = pre => { const el = F.elements; Object.entries(pre || {}).forEach(([k, v]) => { if (el[k]) el[k].value = v; }); pst(''); pform.hidden = false; el.client_name.focus(); };   // used by project pages (twin-awm.js)
+$b('.tw-prop').addEventListener('click', () => { if (!SITE.on) return; if (window.__twinProject) window.__twinProject.active = false;
 const el = F.elements; el.location.value = SITE.place || [SITE.name, SITE.area].filter(Boolean).join(', ');
 const ab = SITE.lat < 24.6 || SITE.lon < 54.95, dxb = !ab && SITE.lat > 24.75 && SITE.lat < 25.36 && SITE.lon < 55.6;
 if (el.utility_approval.value === 'TBD') el.utility_approval.value = ab ? 'TAQA' : dxb ? 'DEWA' : 'TBD';
@@ -3511,7 +3512,7 @@ const svc = model === 'service' ? `
 <div><b>3</b><h4>Drivers pay</h4><p>Per kWh in the ChargePoint app, by card or with Vdrive in car payment.</p></div>
 <div><b>4</b><h4>Revenue is shared</h4><p>The host receives its share every month with a full energy and session report.</p></div>
 </div>
-${T2(['Item', 'Term'], [['Investment', 'ChargePoint funds chargers, installation, the Halo solar canopies, battery storage and O&M'], ['Host provides', 'Bays, power connection point, access, signage rights'], ['Tariff to drivers', num(d.tariff_aed_per_kwh, ' AED/kWh')], ['Host revenue share', num(d.host_revenue_share_pct, ' %')], ['Term', num(d.term_years, ' years')], ['O&M and support', 'Included. 24/7 driver support, remote monitoring, preventive maintenance']])}
+${T2(['Item', 'Term'], [['Investment', d.project ? d.project.investment : 'ChargePoint funds chargers, installation, the Halo solar canopies, battery storage and O&M'], ['Host provides', 'Bays, power connection point, access, signage rights'], ['Tariff to drivers', num(d.tariff_aed_per_kwh, ' AED/kWh')], ['Host revenue share', num(d.host_revenue_share_pct, ' %')], ['Term', num(d.term_years, ' years')], ['O&M and support', 'Included. 24/7 driver support, remote monitoring, preventive maintenance']])}
 <p class="formula">Host income each month = energy sold (kWh) × tariff (${esc(num(d.tariff_aed_per_kwh, ' AED/kWh'))}) × host share (${esc(num(d.host_revenue_share_pct, ' %'))})</p>
 <p>The host invests nothing. Every session is metered and reported, so the share is paid on measured energy, not on estimates.</p>`
 : model === 'co-funded' ? T2(['Item', 'Term'], [['Investment', 'Shared CAPEX, split TBD'], ['Host contribution', 'TBD'], ['Tariff to drivers', num(d.tariff_aed_per_kwh, ' AED/kWh')], ['Host revenue share', num(d.host_revenue_share_pct, ' %')], ['Term', num(d.term_years, ' years')], ['O&M and support', 'Included']])
@@ -3549,7 +3550,7 @@ figure{margin:8px 0 12px}figure img{width:100%;display:block;border-radius:4px}f
 </section>
 <section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
 <h2>Agenda</h2><ul class="agenda">${['About ChargePoint', 'Charging Station Specs', 'Proposed Solution', 'Technology', 'Payment Integration', 'Implementation Plan', 'Service Model'].map((a, i) => `<li><b>0${i + 1}</b>${a}</li>`).join('')}</ul>
-<h3>Site at a glance</h3>${T2(['Item', 'Answer'], [['Client', d.client_name], ['Location', d.location], ['Coordinates', `${d.site.lat}, ${d.site.lon}`], ['Site type', tbd(d.site_type)], ['EV bays', String(d.bays_ev)], ['Halo canopies', canopyText], ['Available load', num(d.available_load_kw, ' kW')], ['Indoor / outdoor', d.indoor_outdoor], ['Public / private', d.public_private], ['Solar shade', 'yes'], ['New grid connection', d.grid_connection], ['Civil work', d.civil_work], ['Utility approval', d.utility_approval], ['Commercial model', label]])}
+<h3>Site at a glance</h3>${T2(['Item', 'Answer'], [['Client', d.client_name], ['Location', d.location], ['Coordinates', `${d.site.lat}, ${d.site.lon}`], ['Site type', tbd(d.site_type)], ['EV bays', String(d.bays_ev)], d.project ? ['Chargers', d.project.equipment] : ['Halo canopies', canopyText], ['Available load', num(d.available_load_kw, ' kW')], ['Indoor / outdoor', d.indoor_outdoor], ['Public / private', d.public_private], ['Solar shade', d.solar_shade || 'yes'], ['New grid connection', d.grid_connection], ['Civil work', d.civil_work], ['Utility approval', d.utility_approval], ['Commercial model', label]])}
 <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>2</span></div></section>
 <section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
 ${H('01', 'About ChargePoint')}
@@ -3560,13 +3561,13 @@ ${H('02', 'Charging Station Specs')}
 ${T2(['Charger', 'Power', 'Sockets', 'Units', 'Mounting'], (d.chargers.length ? d.chargers : [{}]).map(c => [tbd(c.type), num(c.power_kw, ' kW'), num(c.sockets), num(c.units), tbd(c.mounting)]))}
 ${P(`Total sockets: ${sockets || 'TBD'} · EV bays: ${d.bays_ev} of TBD total bays · Available load on site: ${esc(num(d.available_load_kw, ' kW'))}.`)}
 <h3>Solar shade</h3>
-${P(`Chargers are mounted under ChargePoint Halo solar canopies: ${esc(canopyText)}, covering ${d.bays_ev} bays. The canopies carry ${d.site.solar_panels} solar panels (six per bay) and the lighting, keep vehicles and chargers out of direct sun, and stand on battery columns holding 45 kWh per bay (${d.site.battery_kwh.toLocaleString('en-US')} kWh in total). PV capacity, structure and foundation detail follow the site layout in section 03.`)}
+${P(d.project ? esc(d.project.solution) : `Chargers are mounted under ChargePoint Halo solar canopies: ${esc(canopyText)}, covering ${d.bays_ev} bays. The canopies carry ${d.site.solar_panels} solar panels (six per bay) and the lighting, keep vehicles and chargers out of direct sun, and stand on battery columns holding 45 kWh per bay (${d.site.battery_kwh.toLocaleString('en-US')} kWh in total). PV capacity, structure and foundation detail follow the site layout in section 03.`)}
 ${d.indoor_outdoor !== 'indoor' ? P('<span class="muted">Outdoor units: IP65 minimum, UV and heat rated for UAE ambient conditions, with bollard protection.</span>') : ''}
 ${d.indoor_outdoor !== 'outdoor' ? P('<span class="muted">Indoor units: IP54 minimum, ventilation and fire safety per the building\'s existing systems and Civil Defence requirements.</span>') : ''}
 <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>3</span></div></section>
 <section class="page"><div class="hdr"><span>${brand} · EV Charging Station Proposal · ${esc(ref)} · v${esc(d.version)}</span><span>${esc(d.client_name)}</span></div>
 ${H('03', 'Proposed Solution')}
-${P(`At ${esc(d.location)}${d.site.parking_area ? ` (${esc(d.site.parking_area)})` : ''}, ${esc(canopyText)} turn ${d.bays_ev} parking bays into a solar powered charging station, shown here in the client's real surroundings.`)}
+${P(d.project ? esc(d.project.summary) : `At ${esc(d.location)}${d.site.parking_area ? ` (${esc(d.site.parking_area)})` : ''}, ${esc(canopyText)} turn ${d.bays_ev} parking bays into a solar powered charging station, shown here in the client's real surroundings.`)}
 <h3>Site layout and visualisation</h3>
 ${fig(img.layout, 'Site layout: plan view of the Halo canopies on the real site')}
 <div class="two">${fig(img.eye, "Driver's view on arrival")}${fig(img.fsd, 'Smart station view: live bays, charging status and surroundings')}</div>
@@ -3582,7 +3583,7 @@ ${d.grid_connection === 'yes' ? P('A new grid connection is required. ChargePoin
 : d.grid_connection === 'no' ? P(`The station connects to the existing distribution board using the ${esc(num(d.available_load_kw, ' kW'))} spare capacity confirmed on site. Dynamic load management, supported by the canopy batteries, caps the station below that figure.`)
 : P('Grid connection requirement: TBD pending the electrical survey.')}
 <h3>Civil work</h3>
-${d.civil_work === 'yes' ? P('Civil scope: trenching and ducting from the distribution board to the bays, charger foundations, canopy foundations, bollards, bay marking and signage. Reinstatement to match the existing finish.') : d.civil_work === 'no' ? P('No civil work is required. Cabling runs on existing containment and chargers mount on existing structure.') : P('Civil work requirement: TBD pending the site survey.')}
+${d.civil_work === 'yes' ? P('Civil scope: trenching and ducting from the distribution board to the bays, charger ' + (d.project ? 'wall fixings' : 'foundations, canopy foundations') + ', bollards, bay marking and signage. Reinstatement to match the existing finish.') : d.civil_work === 'no' ? P('No civil work is required. Cabling runs on existing containment and chargers mount on existing structure.') : P('Civil work requirement: TBD pending the site survey.')}
 <h3>Approvals</h3>
 ${['TAQA', 'DEWA'].includes(d.utility_approval) ? P(`${d.utility_approval} approval is required for this installation. ChargePoint prepares and submits the application and the as built pack; the client provides the account details and owner's no objection.`) : d.utility_approval === 'none' ? P("No utility approval is required beyond the building's own electrical sign off.") : P('Utility approval requirement: TBD.')}
 ${P(`Access: ${esc(d.public_private)} station. ${access}`)}
@@ -3605,16 +3606,19 @@ ${fig(img.cover, `${canopyText} at ${d.location}`)}
 <div class="ftr"><span>Confidential. Prepared for the addressee only.</span><span>6</span></div></section>
 </body></html>`;
 }
-F.addEventListener('submit', async e => { e.preventDefault(); if (!SITE.on || !SITE.product) return;
+F.addEventListener('submit', async e => { e.preventDefault(); const PJ = window.__twinProject && window.__twinProject.active ? window.__twinProject : null; if (!PJ && (!SITE.on || !SITE.product)) return;
 const v = Object.fromEntries(new FormData(F).entries()); if (!v.client_name.trim()) { pst('Enter the client name.'); return; }
 const win = window.open('', '_blank');   // opened straight from the click so pop-up blockers allow it
 if (win) win.document.write('<p style="font:16px Arial;padding:40px;color:#0F172A">Preparing the proposal and its 4K renders…</p>');
 pst('Rendering the 4K views…'); const go = F.querySelector('button[type=submit]'); go.disabled = true;
 try {
-const counts = {}; SITE.list.forEach(k => { counts[k] = (counts[k] || 0) + 1; });
+const counts = {}; if (!PJ) SITE.list.forEach(k => { counts[k] = (counts[k] || 0) + 1; });
 const logo = (await fileToURL(F.elements.logo.files[0])) || LOGO.url;
-const img = await shoot(), d = intake(v, counts), html = docHTML(d, img, logo, counts);
-const files = [['site-cover-4k.jpg', img.cover], ['site-layout-4k.jpg', img.layout], ['site-drivers-view-4k.jpg', img.eye], ['site-fsd-4k.jpg', img.fsd]];
+const img = PJ ? await PJ.shoot() : await shoot(); let d;
+if (PJ) { d = PJ.intake(v); if (/^CP-PRP-\d{4}-\d{3}$/.test((v.ref || '').trim())) d.ref = v.ref.trim(); if (LOGO.url && !(F.elements.logo.files && F.elements.logo.files[0])) d.client_logo_url = LOGO.url; if ((v.client_site || '').trim()) d.client_website = v.client_site.trim(); }
+else d = intake(v, counts);
+const html = docHTML(d, img, logo, counts);
+const files = [['site-cover-4k.jpg', img.cover], ['site-layout-4k.jpg', img.layout], ['site-drivers-view-4k.jpg', img.eye], ['site-fsd-4k.jpg', img.fsd]].filter(f => f[1]);
 const wire = (doc, close) => {
 const save = async (name, data, type) => { const blob = typeof data === 'string' && data.startsWith('data:') ? await (await fetch(data)).blob() : new Blob([data], { type }); await saveFile(name, blob); };
 doc.getElementById('dl-json').onclick = () => save(`${d.ref || 'CP-PRP-draft'}_${slug(d.client_name)}.json`, JSON.stringify(d, null, 2), 'application/json');
