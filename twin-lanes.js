@@ -249,7 +249,7 @@
         cands.sort((x, y) => y.sc - x.sc);
         const win = cands[0].shear && cands[0].sc > cands.find(c => !c.shear).sc * 1.15 ? cands[0] : cands.find(c => !c.shear);   // angled only when clearly sharper
         const shear = win.shear, div = { dir: bestA + win.al }; db.shear = +shear.toFixed(3); db.cands = cands.map(c => [Math.round(c.al), +c.sc.toFixed(2)]); if (shear) db.bayAngle = +win.al.toFixed(1);
-        if (mar) out.blocks.push(mar.corners.concat([mar.corners[0]]).map(([x, y]) => toLL(x + ph.ox, y + ph.oy)));
+        // (the block's own rectangle is used for direction only; it is not drawn)
         const a = bestA * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), pr = profileAt(a, 1), nb = pr.nb;
         const val = new Float64Array(nb); for (let b = 0; b < nb; b++) val[b] = pr.N[b] > 6 ? pr.S2[b] / pr.N[b] : NaN;
         const sm = Array.from(val, (v, i) => { let s = 0, n = 0; for (let k = -3; k <= 3; k++) { const q = val[i + k]; if (q === q && q !== undefined) { s += q; n++; } } return n ? s / n : NaN; });
@@ -303,6 +303,69 @@
         for (let k = 0; k < cRuns.length - 1; k++) { const A1 = cRuns[k], B1 = cRuns[k + 1], gapM = (B1.v0 - A1.v1) * mpp;
           if (gapM >= 3.5 && gapM <= 10) { const u0 = Math.max(A1.u0, B1.u0), u1 = Math.min(A1.u1, B1.u1), v = (A1.v1 + B1.v0) / 2; if ((u1 - u0) * mpp > 6) out.aisles.push([toMap(u0, v), toMap(u1, v)]); } }
         if (cRuns.length) kept++; });
+      // 6b. whole-layout fit: an open car park is a regular pattern, so one model is fitted to the whole outlined area at once:
+      //     rows run at one angle θ; across them the pattern repeats every P metres as [row d][row d][lane a] (P = 2d + a, double-loaded);
+      //     along them bays repeat every w metres. θ maximises the banding of edge strength (Radon), (P, d, φ) maximise the correlation
+      //     between the cross-profile and the ±1 template of that pattern, w and its phase come from the autocorrelation along the rows.
+      //     Every row of the fitted grid is then cut to the outline, minus buildings, roads, trees and cross lanes, and the bays are counted:
+      //     N = Σ over rows of floor(usable length / w). The theoretical capacity A / (w·(d + a/2)) is given alongside as a check.
+      if (lot || AIS.length) { const st0 = Math.max(1, Math.round(0.5 / mpp)), RP = [];
+        for (let y = 2; y < h - 2; y += st0) for (let x = 2; x < w - 2; x += st0) { const i = y * w + x; if (inLot(i)) RP.push(i); }
+        const areaM = RP.length * (st0 * mpp) ** 2;
+        if (areaM >= 1200) {
+          // edge strength on the region (computed here when the lane step did not)
+          const GF2 = GA.some(v => v > 0) ? GA : (() => { const g = new Float32Array(WH); for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (!inLot(i)) continue;
+            const gx = gray[i - w + 1] + 2 * gray[i + 1] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - 1] - gray[i + w - 1], gy = gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1]; g[i] = Math.min(255, Math.hypot(gx, gy)); } return g; })();
+          let cxp = 0, cyp = 0; RP.forEach(i => { cxp += i % w; cyp += (i / w) | 0; }); cxp /= RP.length; cyp /= RP.length;
+          const prof = (a, bin) => { const ca = Math.cos(a), sa = Math.sin(a), S = new Map(); RP.forEach(i => { const x = i % w - cxp, y = ((i / w) | 0) - cyp, v = Math.floor((-x * sa + y * ca) * mpp / bin); const e = S.get(v) || [0, 0]; e[0] += GF2[i]; e[1]++; S.set(v, e); }); return S; };
+          const band = a => { const S = prof(a, 0.5), vals = [...S.values()].filter(e => e[1] > 8).map(e => e[0] / e[1]); if (vals.length < 20) return 0; const m = vals.reduce((p, q) => p + q, 0) / vals.length; return Math.sqrt(vals.reduce((p, q) => p + (q - m) ** 2, 0) / vals.length) / (m || 1); };
+          let bA = 0, bS = -1; for (let d = 0; d < 180; d += 2) { const sc = band(d * Math.PI / 180); if (sc > bS) { bS = sc; bA = d; } }
+          for (let d = bA - 2; d <= bA + 2; d += 0.25) { const sc = band(d * Math.PI / 180); if (sc > bS) { bS = sc; bA = d; } }
+          const th = bA * Math.PI / 180, ca = Math.cos(th), sa = Math.sin(th);
+          // cross-profile at 0.25 m, z-scored over the bins the region covers
+          const S = prof(th, 0.25), keys = [...S.keys()].filter(k => S.get(k)[1] > 4), kMin = Math.min(...keys), kMax = Math.max(...keys), nV = kMax - kMin + 1, Zv = new Float64Array(nV), Cv = new Uint8Array(nV);
+          keys.forEach(k => { const e = S.get(k); Zv[k - kMin] = e[0] / e[1]; Cv[k - kMin] = 1; });
+          const zs = keys.map(k => Zv[k - kMin]), zm = zs.reduce((p, q) => p + q, 0) / zs.length, zsd = Math.sqrt(zs.reduce((p, q) => p + (q - zm) ** 2, 0) / zs.length) || 1; for (let j = 0; j < nV; j++) if (Cv[j]) Zv[j] = (Zv[j] - zm) / zsd;
+          let fit = { r: -1 }; const nCov = keys.length;
+          for (let P = 14.5; P <= 19.01; P += 0.25) for (let d = 4.5; d <= 5.76; d += 0.25) { const a = P - 2 * d; if (a < 4.5 || a > 8) continue; const nP = Math.round(P / 0.25), nD = Math.round(d / 0.25);
+            for (let f = 0; f < nP; f++) { let sm = 0; for (let j = 0; j < nV; j++) { if (!Cv[j]) continue; const ph2 = ((j - f) % nP + nP) % nP; sm += ph2 < 2 * nD ? Zv[j] : -Zv[j]; } const r = sm / nCov; if (r > fit.r) fit = { r, P, d, a, f, nP, nD }; } }
+          dbg.fit = { ang: +bA.toFixed(2), band: +bS.toFixed(3), r: +fit.r.toFixed(3), P: fit.P, d: fit.d, a: fit.a, area: Math.round(areaM) };
+          if (fit.r >= 0.25) {
+            const toMapF = (u, v) => toLL(cxp + u * ca - v * sa + ph.ox, cyp + u * sa + v * ca + ph.oy), pxAt = (u, v) => { const xi = Math.round(cxp + u * ca - v * sa), yi = Math.round(cyp + u * sa + v * ca); return xi < 0 || yi < 0 || xi >= w || yi >= h ? -1 : yi * w + xi; };
+            const mP = 1 / mpp, rowsF = [];   // rows of the fitted grid, in pixels across (v0, v1), kept where the band is busy
+            for (let k = Math.floor((kMin - fit.f) / fit.nP) - 1; k <= Math.ceil((kMax - fit.f) / fit.nP) + 1; k++) for (let s2 = 0; s2 < 2; s2++) {
+              const j0 = fit.f + k * fit.nP + s2 * fit.nD, j1 = j0 + fit.nD; let sm = 0, n = 0; for (let j = j0; j < j1; j++) { const jj = j; if (jj >= 0 && jj < nV && Cv[jj]) { sm += Zv[jj]; n++; } }
+              if (n < fit.nD * 0.6 || sm / n < 0) continue; rowsF.push({ v0: (j0 + kMin) * 0.25 * mP, v1: (j1 + kMin) * 0.25 * mP, k }); }
+            // along the rows: busy profile over all rows together (cars and bay lines), for cross lanes and the bay rhythm
+            const uMin = -Math.hypot(w, h), nU = Math.ceil(2 * Math.hypot(w, h) / (0.25 * mP)), AU = new Float64Array(nU), NU = new Float64Array(nU);
+            rowsF.forEach(R => { for (let v = R.v0 + 0.15 * (R.v1 - R.v0); v < R.v1 - 0.15 * (R.v1 - R.v0); v += st0) for (let b = 0; b < nU; b++) { const i = pxAt(uMin + (b + 0.5) * 0.25 * mP, v); if (i < 0 || !inLot(i)) continue; AU[b] += GF2[i]; NU[b]++; } });
+            const AUm = Array.from(AU, (x, b) => NU[b] ? x / NU[b] : NaN), okU = AUm.filter(x => x === x).sort((p, q) => p - q), medU = okU[okU.length >> 1] || 1;
+            // cross lanes: stretches of 5 m or more where every row is smooth
+            const cross = new Uint8Array(nU); { let b0 = -1; for (let b = 0; b <= nU; b++) { let sm = 0, n = 0; for (let j = Math.max(0, b - 8); j < Math.min(nU, b + 8); j++) if (AUm[j] === AUm[j]) { sm += AUm[j]; n++; }
+                const low = b < nU && n > 4 && sm / n < medU * 0.45; if (low && b0 < 0) b0 = b; if (!low && b0 >= 0) { if ((b - b0) * 0.25 >= 5) for (let j = b0; j < b; j++) cross[j] = 1; b0 = -1; } } }
+            // bay width and phase from the rhythm along the rows
+            const Pz = AUm.map(x => x === x ? x : medU), Zu = Pz.map((x, i) => { let sm = 0, n = 0; for (let j = Math.max(0, i - 12); j <= Math.min(nU - 1, i + 12); j++) { sm += Pz[j]; n++; } return x - sm / n; }), Eu = Zu.reduce((p, q) => p + q * q, 0) || 1;
+            let pkU = 0, lagU = 10; for (let Lg = 9; Lg <= 12; Lg++) { let sm = 0; for (let i = 0; i + Lg < nU; i++) sm += Zu[i] * Zu[i + Lg]; sm /= Eu * (nU - Lg) / nU; if (sm > pkU) { pkU = sm; lagU = Lg; } }
+            if (pkU < 0.06) lagU = 10; let phU = 0, phS = -1e18; for (let o = 0; o < lagU; o++) { let sm = 0; for (let i = o; i < nU; i += lagU) sm += Pz[i]; if (sm > phS) { phS = sm; phU = o; } }
+            const bpx = lagU * 0.25 * mP, wB = lagU * 0.25; dbg.fit.w = wB; dbg.fit.rows = rowsF.length;
+            // place the bays: every slot of the grid inside the outline, off cross lanes, trees and buildings
+            const fitRuns = []; rowsF.forEach(R => { let cur = null; const close = () => { if (cur && cur.bays.length >= 2) fitRuns.push(cur); cur = null; };
+              for (let b = phU; b + lagU <= nU; b += lagU) { const a0 = uMin + b * 0.25 * mP, a1 = a0 + bpx; let cr = 0; for (let j = b; j < b + lagU; j++) cr += cross[j];
+                let t = 0, gd = 0, vg = 0; for (let su = 0.15; su < 1; su += 0.23) for (let sv = 0.12; sv < 1; sv += 0.19) { const i = pxAt(a0 + su * bpx, R.v0 + sv * (R.v1 - R.v0)); t++; if (i < 0) continue; if (inLot(i)) gd++; if (VEG[i] && GF2[i] > 28) vg++; }
+                const FF = dbg.fit.fail = dbg.fit.fail || { out: 0, cross: 0, veg: 0, ok: 0 }; if (gd / t < 0.6) { if (gd > 0) FF.out++; close(); continue; } if (cr > lagU / 2) { FF.cross++; close(); continue; } if (vg / t > 0.15) { FF.veg++; close(); continue; } FF.ok++;
+                const ring = [toMapF(a0, R.v0), toMapF(a1, R.v0), toMapF(a1, R.v1), toMapF(a0, R.v1), toMapF(a0, R.v0)]; if (BLD.length && bldShare(ring) > 0.10) { FILT.bld++; close(); continue; }
+                if (!cur) cur = { v0: R.v0, v1: R.v1, bays: [], comp: 800000 + R.k, rot: Math.round(((-bA) % 180 + 180) % 180), bayM: wB, toMap: toMapF, shear: 0, bayAngle: 90, fit: true };
+                cur.bays.push({ ring, c: toMapF((a0 + a1) / 2, (R.v0 + R.v1) / 2), u: (a0 + a1) / 2, v: (R.v0 + R.v1) / 2 }); }
+              close(); });
+            fitRuns.forEach(r => { r.u0 = Math.min(...r.bays.map(b => b.u)) - bpx / 2; r.u1 = Math.max(...r.bays.map(b => b.u)) + bpx / 2; r.ring = [toMapF(r.u0, r.v0), toMapF(r.u1, r.v0), toMapF(r.u1, r.v1), toMapF(r.u0, r.v1), toMapF(r.u0, r.v0)]; });
+            const nFit = fitRuns.reduce((p, r) => p + r.bays.length, 0), nOld = runs.reduce((p, r) => p + r.bays.length, 0);
+            dbg.fit.n = nFit; dbg.fit.old = nOld;
+            // the fitted layout replaces the patchwork when it explains the photo and finds at least as much
+            if (nFit >= 8 && nFit >= nOld * 0.8) { runs.length = 0; fitRuns.forEach(r => runs.push(r)); out.rows = runs.map(r => r.ring); out.bays = runs.flatMap(r => r.bays); spaces = out.bays.length;
+              out.aisles = []; for (let k = 0; k < rowsF.length - 1; k++) { const A1 = rowsF[k], B1 = rowsF[k + 1], gapM = (B1.v0 - A1.v1) * mpp; if (gapM >= 4 && gapM <= 8.5) { const vm = (A1.v1 + B1.v0) / 2, us = fitRuns.filter(r => r.v0 === A1.v0 || r.v0 === B1.v0).flatMap(r => [r.u0, r.u1]); if (us.length) out.aisles.push([toMapF(Math.min(...us), vm), toMapF(Math.max(...us), vm)]); } }
+              kept = 1; FILT.fit = { n: nFit, P: fit.P, d: fit.d, a: +fit.a.toFixed(2), w: wB, ang: bA, est: Math.round(areaM / (wB * (fit.d + fit.a / 2))), area: Math.round(areaM) };
+              if (lot && lot.ring) out.blocks = [lot.ring]; } } } }
+
       // 7. shade structures: long bright roofs 4 to 12 m wide (one or two rows of cars) whose surface carries a regular stripe every 2.2 to 3.4 m,
       //    one stripe per bay. Found anywhere in the photo except on mapped tall buildings and roads, whatever the colour filter said about them;
       //    where one is found, its bays replace anything the other readings placed there.
@@ -331,6 +394,7 @@
             bands = []; let b0 = -1; for (let j = 0; j <= nv; j++) { const onB = j < nv && fr[j] > 0.45; if (onB && b0 < 0) b0 = j; if (!onB && b0 >= 0) { const wm = (j - b0) * 0.5; if (wm >= 4 && wm <= 12.5) bands.push([b0 * vb, j * vb]); b0 = -1; } } }
           d.bands = bands.length;
           bands.forEach(([vA, vB], bi) => { const Wb = (vB - vA) * mpp;
+            { let n = 0, t = 0; for (let uu = 0; uu < Lp; uu += 3) for (let vv = vA; vv < vB; vv += 3) { const i = pix(uu, vv); if (i < 0) continue; t++; if (inLot(i)) n++; } if (!t || n / t < 0.5) return; }   // only shades over the car park itself
             // brightness along the roof (middle 60% of the band): the stripes
             const q4 = 0.25 / mpp, nb = Math.floor(Lp / q4), prof = new Float64Array(nb), cov = new Float64Array(nb);
             for (let b = 0; b < nb; b++) { let sm = 0, n = 0, rf = 0; for (let uu = b * q4; uu < (b + 1) * q4; uu += 1) for (let vv = vA + (vB - vA) * 0.2; vv < vA + (vB - vA) * 0.8; vv += 1) { const i = pix(uu, vv); if (i < 0) continue; sm += gray[i]; n++; if (roof(i)) rf++; } prof[b] = n ? sm / n : 0; cov[b] = n ? rf / n : 0; }
@@ -370,7 +434,7 @@
       LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp, obst: OBST, lot: lot || null }; hookMap(map); tools.hidden = false; draw(map, out);
       const bw = nearest.bayM.toFixed(2);
       const ang = runs.filter(r => r.shear).length, dropped = FILT.bld + FILT.veg; dbg.filtered = FILT;
-      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays ${bw} m wide${nearest.shear ? `, angled at ${nearest.bayAngle}°` : ''}).${ang ? ` ${ang} row${ang > 1 ? 's' : ''} of angled parking.` : ''}${FILT.shade ? ` ${FILT.shade} bays read from the stripes of shade structures.` : ''}${dropped ? ` ${dropped} bay${dropped > 1 ? 's' : ''} left out under trees or buildings.` : ''}`);
+      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays ${bw} m wide${nearest.shear ? `, angled at ${nearest.bayAngle}°` : ''}).${ang ? ` ${ang} row${ang > 1 ? 's' : ''} of angled parking.` : ''}${FILT.shade ? ` ${FILT.shade} bays read from the stripes of shade structures.` : ''}${FILT.fit ? ` Fitted layout: rows every ${FILT.fit.P} m (bays ${FILT.fit.d} m deep, lanes ${FILT.fit.a} m), ${FILT.fit.n} spaces counted; the ${FILT.fit.area.toLocaleString('en-US')} m² area would hold about ${FILT.fit.est} at this layout.` : ''}${dropped ? ` ${dropped} bay${dropped > 1 ? 's' : ''} left out under trees or buildings.` : ''}`);
     }
 
     // ---- drawing, in the style of a site design: every bay a white rectangle, the charging bays green with a badge, lanes dashed ----
@@ -380,7 +444,7 @@
       const ids = ['lv-blk', 'lv-row', 'lv-bay', 'lv-ev', 'lv-evl', 'lv-aisle', 'lv-hov'];
       const add = () => { ids.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); }); ['lv-k', 'lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
         map.addSource('lv-k', { type: 'geojson', data: fc((out.blocks || []).map(r => r), 'LineString') });
-        map.addLayer({ id: 'lv-blk', type: 'line', source: 'lv-k', paint: { 'line-color': '#8DC63F', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0 } });
+        map.addLayer({ id: 'lv-blk', type: 'line', source: 'lv-k', paint: { 'line-color': '#8DC63F', 'line-width': 2, 'line-opacity': 0.95 } });
         map.addSource('lv-r', { type: 'geojson', data: fc(out.rows, 'Polygon') }); map.addSource('lv-b', { type: 'geojson', data: fc([], 'Polygon') });
         map.addSource('lv-e', { type: 'geojson', data: fc([], 'Polygon') }); map.addSource('lv-a', { type: 'geojson', data: fc(out.aisles, 'LineString') }); map.addSource('lv-h', { type: 'geojson', data: fc([], 'Polygon') });
         map.addLayer({ id: 'lv-row', type: 'fill', source: 'lv-r', paint: { 'fill-color': '#0b0f16', 'fill-opacity': 0.35 } });

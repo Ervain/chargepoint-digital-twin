@@ -2736,12 +2736,17 @@ const capText = cap > 0 ? `${cap.toLocaleString('en-US')} spaces (mapped)` : est
 let rot = Math.round(((-ang * 180 / Math.PI) % 180 + 180) % 180);
 return { i, lat: lat0, lon: lon0, area, kind, capText, rot, ring, name: tags.name || '', label: tags.name || `${kind} car park` };
 }
-function probe(center, zoom, read) { return new Promise((res, rej) => {
-const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:1000px;height:800px;visibility:hidden;pointer-events:none'; document.body.appendChild(box);
-let m; const done = (v, e) => { clearTimeout(t); try { m && m.remove(); } catch (x) {} box.remove(); e ? rej(e) : res(v); };
-const t = setTimeout(() => done(null, new Error('tiles timeout')), 20000);
-try { m = new maplibregl.Map({ container: box, style: STREETS, center, zoom, interactive: false, attributionControl: false, fadeDuration: 0 }); } catch (e) { done(null, e); return; }
-m.once('idle', () => { try { done(read(m)); } catch (e) { done(null, e); } }); }); }
+function probe(center, zoom, read, tries = 2) { return probe1(center, zoom, read).catch(e => tries > 1 ? new Promise(r => setTimeout(r, 800)).then(() => probe(center, zoom, read, tries - 1)) : Promise.reject(e)); }   // the free tile server is sometimes slow: one retry
+const PRB = { m: null, box: null, q: Promise.resolve() };
+function probe1(center, zoom, read) { const job = PRB.q.then(() => new Promise((res, rej) => {
+if (!PRB.m) { const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:1000px;height:800px;visibility:hidden;pointer-events:none'; document.body.appendChild(box); PRB.box = box;
+try { PRB.m = new maplibregl.Map({ container: box, style: STREETS, center, zoom, interactive: false, attributionControl: false, fadeDuration: 0 }); } catch (e) { box.remove(); PRB.box = null; rej(e); return; } }
+const m = PRB.m; let fin = false;
+const t = setTimeout(() => { if (fin) return; fin = true; try { m.remove(); } catch (x) {} if (PRB.box) PRB.box.remove(); PRB.m = null; PRB.box = null; rej(new Error('tiles timeout')); }, 20000);
+const go = () => { if (fin) return; fin = true; clearTimeout(t); try { res(read(m)); } catch (e) { rej(e); } };
+m.once('idle', go); m.jumpTo({ center, zoom });
+const chk = () => { if (fin) return; if (m.isStyleLoaded() && m.areTilesLoaded() && !m.isMoving()) setTimeout(() => { if (!fin && m.areTilesLoaded()) go(); }, 250); else setTimeout(chk, 300); }; setTimeout(chk, 400); }));
+PRB.q = job.catch(() => {}); return job; }
 const hull = pts => { pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (pts.length < 3) return null;
 const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
 for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
