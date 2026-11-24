@@ -27,7 +27,8 @@
       .forEach(o => { const m = o.material; m.bumpMap = canvasTex(512, 512, (c, w, h) => noise(c, w, h, [[16, 0.6], [64, 0.5], [256, 0.4]], 128, 0.6), [o.geometry.parameters.width / 2, 2]); m.bumpScale = 0.01; m.needsUpdate = true; });
     const grime = new T.MeshBasicMaterial({ map: canvasTex(16, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(40,34,26,0)'); g.addColorStop(0.75, 'rgba(40,34,26,.22)'); g.addColorStop(1, 'rgba(30,26,20,.45)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }), transparent: true, depthWrite: false });
     const G = new T.Group(); E.add(G);
-    const gm = new T.Mesh(new T.PlaneGeometry(60, 0.7), grime); gm.position.set(0, 0.35, WALL + 0.003); G.add(gm);
+    // the back wall is matt black from end to end, so the charging wall reads as one dark surface (owner's choice); no grime band on it
+    { const bw = find(plane(60, CEIL)); if (bw) { bw.material = new T.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.92, metalness: 0, bumpMap: bw.material.bumpMap || null, bumpScale: 0.006 }); } }
     const LX = -BW - 1.3, gl = new T.Mesh(new T.PlaneGeometry(15, 0.7), grime); gl.rotation.y = Math.PI / 2; gl.position.set(LX + 0.003, 0.35, WALL + 7.5); G.add(gl);
 
     // ---- 3. ceiling: board-marked concrete soffit, downstand beams every 5.2 m, and linear LED fittings ----
@@ -45,7 +46,7 @@
     // ---- 4. structure: concrete columns either side of the charging bays, with the car park's blue banding and a corner guard ----
     const colM = new T.MeshStandardMaterial({ color: 0xe9e4d8, roughness: 0.85, bumpMap: conc.bumpMap, bumpScale: 0.008 });
     const bandM = new T.MeshStandardMaterial({ color: 0x2c4f9c, roughness: 0.7 }), guardM = new T.MeshStandardMaterial({ color: 0xf2c200, roughness: 0.6 }), blackM = new T.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.7 });
-    for (const x of [-(BW + 0.35), BW + 0.35, -(3 * BW + 0.95), 3 * BW + 0.95]) { const z = WALL + 0.35;
+    for (const x of [-(3 * BW + 0.95), 3 * BW + 0.95]) { const z = WALL + 0.35;   // the two beside the charging wall were taken out (owner's choice)
       const c = new T.Mesh(new T.BoxGeometry(0.5, CEIL, 0.6), colM); c.position.set(x, CEIL / 2, z); c.castShadow = c.receiveShadow = true; G.add(c);
       for (const y of [1.72, 2.02]) { const b = new T.Mesh(new T.BoxGeometry(0.512, 0.14, 0.612), bandM); b.position.set(x, y, z); G.add(b); }
       for (let i = 0; i < 6; i++) { const s = new T.Mesh(new T.BoxGeometry(0.52, 0.12, 0.62), i % 2 ? blackM : guardM); s.position.set(x, 0.06 + i * 0.12, z); G.add(s); } }
@@ -80,8 +81,9 @@
       c.position.set(0, 0, 0); c.rotation.set(0, 0, 0); E.add(c); c.updateMatrixWorld(true);
       const body = boxOf(c, /body_primary/), sz = body.getSize(new T.Vector3());
       c.rotation.y = sz.x > sz.z ? Math.PI / 2 : 0; c.updateMatrixWorld(true);   // length along the bay
-      const b2 = boxOf(c, /body_primary/), wh = boxOf(c, /wheels/), c2 = b2.getCenter(new T.Vector3()), len = Math.max(sz.x, sz.z);
-      const [x] = slots[k]; c.position.set(x - c2.x, -(wh.isEmpty() ? b2.min.y : wh.min.y), Z0 + 0.4 + len / 2 - c2.z);
+      // measured in the basement's own coordinates (the group sits off the scene centre), then the rear is backed up 0.3 m from the head of the bay
+      const o0 = E.getWorldPosition(new T.Vector3()), b2 = boxOf(c, /body_primary/).translate(o0.clone().negate()), wh = boxOf(c, /wheels/).translate(o0.clone().negate()), c2 = b2.getCenter(new T.Vector3());
+      const [x] = slots[k]; c.position.set(x - c2.x, -(wh.isEmpty() ? b2.min.y : wh.min.y), Z0 + 0.3 - b2.min.z);
       cars.push(c); A.draw(); A.say(`Car parked in ${slots[k][1] === 'bay' ? 'the next bay' : slots[k][1]}. ${cars.length} of ${slots.length}.`); }
     function clearCars() { cars.splice(0).forEach(c => E.remove(c)); A.draw(); A.say('Cars cleared.'); }
 
