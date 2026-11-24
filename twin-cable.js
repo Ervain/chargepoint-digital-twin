@@ -122,5 +122,5 @@
   }
 })();
 // the ruler lives in its own file next to this one
-(() => { const me = document.currentScript; ['twin-measure', 'twin-move'].forEach(n => { if (document.querySelector(`script[src*="${n}"]`)) return; const s = document.createElement('script');
+(() => { const me = document.currentScript; ['twin-measure', 'twin-move', 'twin-awm'].forEach(n => { if (document.querySelector(`script[src*="${n}"]`)) return; const s = document.createElement('script');
   s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, n + '.js'); document.head.appendChild(s); }); })();

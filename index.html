@@ -1721,6 +1721,7 @@ function ensureSlim() {   // the no-battery canopies are only built the first ti
 /* ---------- project: Al Wahda Mall, Abu Dhabi. Two basement bays from the site photo, cleared of cars: one double-gun AC post
    (the slim post and charger from "AC post", no canopy), a lit sign on a graphite feature wall, and repainted bays ---------- */
 const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () => current === 'awm' && ENV.on && !ENV.indoor };
+window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () => current };   // a handle for twin-awm.js (textures, extra cars)
 {
   const BW = 2.6, Z0 = 0.25, BL = 5.2, WALL = -0.75, CEIL = 3.3, POSTZ = -0.22, POSTH = 1.72;
   const g = new T.Group();
@@ -1729,15 +1730,27 @@ const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () 
   const WF = WALL + 0.006, RD = 0.035, FT = 2.129;
   for (const sx of [-1, 1]) { const cx = sx * BW / 2, sh = new T.Shape();
     [[-0.13, 0], [0.13, 0], [0.13, 1.62], [0.55, FT], [-0.55, FT], [-0.13, 1.62]].forEach(([x, y], i) => (i ? sh.lineTo(x, y) : sh.moveTo(x, y))); sh.closePath();
-    const rel = new T.Mesh(new T.ExtrudeGeometry(sh, { depth: RD, bevelEnabled: false }), M_unit); rel.position.set(cx, 0, WF); rel.castShadow = rel.receiveShadow = true; g.add(rel);
-    acPostChargerSolo(g, cx).position.z = WF + RD - 0.2;
-    const lg = new T.Mesh(new T.PlaneGeometry(0.5, 0.092), M_cpWhite); lg.rotation.z = Math.PI / 2; lg.position.set(cx, 0.5, WF + RD + 0.001); g.add(lg); }
+    // a shallow graphite niche, 760 x 2,200 mm, with a vertical brand-gradient light on one edge and the bay number above the charger
+    // the family silhouette painted flat on the wall: the slim post rising into the flared cover, a slim band for the shade with the brand light along its lower edge
+    const nm = new T.MeshStandardMaterial({ color: 0x1d1d1b, roughness: 0.92, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), pf = new T.Shape();   // the family matt black, #1D1D1B
+    [[-0.13, 0], [0.13, 0], [0.13, 1.70], [0.62, 2.22], [-0.62, 2.22], [-0.13, 1.70]].forEach(([x, y], i) => (i ? pf.lineTo(x, y) : pf.moveTo(x, y))); pf.closePath();
+    const rel = new T.Mesh(new T.ShapeGeometry(pf), nm); rel.position.set(cx, 0, WF + 0.002); rel.receiveShadow = true; g.add(rel);
+    const sm2 = new T.MeshStandardMaterial({ color: 0x1d1d1b, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 });
+    const sb = new T.Mesh(new T.PlaneGeometry(1.3, 0.07), sm2); sb.position.set(cx, 2.255, WF + 0.003); sb.receiveShadow = true; g.add(sb);
+    const lt = accTex(512, 16, (c, w, h) => { const gr = c.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, BRAND.a); gr.addColorStop(1, BRAND.b); c.fillStyle = gr; c.fillRect(0, 0, w, h); });
+    const lm = new T.MeshBasicMaterial({ map: lt, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }); lm.color.setScalar(1.3);
+    const ll = new T.Mesh(new T.PlaneGeometry(1.3, 0.012), lm); ll.position.set(cx, 2.226, WF + 0.004); g.add(ll);
+    const nt = accTex(1024, 512, (c, w, h) => { c.clearRect(0, 0, w, h); c.textAlign = 'center'; c.textBaseline = 'alphabetic'; if ('letterSpacing' in c) c.letterSpacing = '0px';
+      c.fillStyle = '#f5f5f7'; c.font = '700 300px "Helvetica Neue",Helvetica,Arial,sans-serif'; c.fillText('0' + (sx < 0 ? 1 : 2), w / 2, 300);
+      c.fillStyle = '#c7c7cc'; c.font = '500 72px "Helvetica Neue",Helvetica,Arial,sans-serif'; if ('letterSpacing' in c) c.letterSpacing = '4px'; c.fillText('22 kW  ·  Type 2', w / 2, 430); });
+    const nl = new T.Mesh(new T.PlaneGeometry(0.46, 0.23), new T.MeshBasicMaterial({ map: nt, transparent: true, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -12 })); nl.position.set(cx, 1.98, WF + 0.006); nl.renderOrder = 2; g.add(nl);
+    acPostChargerSolo(g, cx).position.z = WF - 0.2; }
   // shared screen: one slim rounded display on the wall between the two chargers, with a flush glass face
-  { const HW = 0.46, HH = 0.30, HY = 1.62, zf = WF + 0.03;
+  { const HW = 0.64, HH = 0.40, HY = 1.55, zf = WF + 0.03;
     const hg = new T.ExtrudeGeometry(roundRect(HW, HH, 0.05), { depth: 0.022, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.008, bevelSegments: 4, curveSegments: 16 });
     const head = new T.Mesh(hg, M_unit); head.position.set(0, HY, WF); head.castShadow = true; g.add(head);
     const glassF = new T.Mesh(new T.ShapeGeometry(roundRect(HW - 0.012, HH - 0.012, 0.045), 16), M.gloss); glassF.position.set(0, HY, zf + 0.0005); g.add(glassF);
-    const SW = 0.40, SH = 0.25, sg = new T.ShapeGeometry(roundRect(SW, SH, 0.034), 16), uv = sg.attributes.uv, ps = sg.attributes.position;
+    const SW = 0.60, SH = 0.375, sg = new T.ShapeGeometry(roundRect(SW, SH, 0.04), 16), uv = sg.attributes.uv, ps = sg.attributes.position;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, ps.getX(i) / SW + 0.5, ps.getY(i) / SH + 0.5);
     const cv = document.createElement('canvas'); cv.width = 640; cv.height = 400; const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8;
     const scr = new T.Mesh(sg, new T.MeshBasicMaterial({ map: tex, toneMapped: false })); scr.position.set(0, HY, zf + 0.0012); g.add(scr);
@@ -1814,7 +1827,42 @@ const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () 
   const wallM = new T.MeshStandardMaterial({ map: texFrom(ENV2_SRC.plaster, 12, 1), color: 0xece5d4, roughness: 0.9 }), wallL = new T.MeshStandardMaterial({ map: texFrom(ENV2_SRC.plaster, 5, 1), color: 0xece5d4, roughness: 0.9 });
   PL(80, 80, floorM, 0, 0, 30, -Math.PI / 2);
   PL(60, CEIL, wallM, 0, CEIL / 2, WALL);
-  PL(2 * BW + 0.5, CEIL, S(0x1d1d1b, 0.8), 0, CEIL / 2, WALL + 0.006);                                   // graphite feature wall behind the two bays
+  // feature wall: near-black, with one huge lowercase word cropped by the floor
+  { const hx = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+    const mt = accTex(4096, 2372, (c, w, h) => { const k = w / (2 * BW + 0.5), A = hx(BRAND.a), B = hx(BRAND.b), F = '"Helvetica Neue",Helvetica,Arial,sans-serif';
+      // near-black field
+      c.fillStyle = '#0b0b0c'; c.fillRect(0, 0, w, h); let sd = 9; const r = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 40000; i++) { c.fillStyle = r() < 0.5 ? 'rgba(255,255,255,.03)' : 'rgba(0,0,0,.06)'; c.fillRect(r() * w, r() * h, 2, 2); }   // grain goes under the word, so it never breaks the light lines
+      // one huge lowercase word, cropped by the floor and the wall edges, a dark grey that only shows up close
+      const FS = 2.2 * k; c.font = `700 ${FS}px ${F}`; if ('letterSpacing' in c) c.letterSpacing = `${-0.05 * FS}px`; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+      // halo-lit, like signage letters standing off the wall: brand light spills from behind each letter onto the wall,
+      // the faces stay dark, and a fine rim catches the light along the top edges
+      const tx = w / 2 + 0.05 * k, ty = h + 0.12 * k, tw = c.measureText('charge').width, hg = c.createLinearGradient(tx - tw / 2, 0, tx + tw / 2, 0);
+      hg.addColorStop(0, BRAND.a); hg.addColorStop(1, BRAND.b);
+      // drawn in a few lines of light, like a faceted glass numeral: dark letters, and only the edges that face the light carry a thin,
+      // crisp line that fades out along its length. One set of lines from the upper left, a fainter set on the right-hand edges
+      const mk = () => { const E = document.createElement('canvas'); E.width = w; E.height = h; const e = E.getContext('2d'); e.font = c.font; if ('letterSpacing' in e) e.letterSpacing = c.letterSpacing; e.textAlign = 'center'; e.textBaseline = 'alphabetic'; return [E, e]; };
+      // each line is the outer half of a smooth, anti-aliased stroke, kept only where it lies inside the letters shifted towards the light,
+      // so it follows the lit edges with clean curves (subtracting two fills left stair-steps along the curves)
+      const edge = (dx, dy, lw, paint, fade) => { const [E, e] = mk(); e.strokeStyle = '#fff'; e.lineWidth = 2 * lw; e.lineJoin = 'round'; e.strokeText('charge', tx, ty);
+        e.globalCompositeOperation = 'destination-out'; e.fillText('charge', tx, ty);
+        e.globalCompositeOperation = 'destination-in'; e.fillStyle = '#fff'; e.fillText('charge', tx + dx, ty + dy);
+        e.globalCompositeOperation = 'source-in'; e.fillStyle = paint; e.fillRect(0, 0, w, h); e.globalCompositeOperation = 'destination-in'; e.fillStyle = fade; e.fillRect(0, 0, w, h); return E; };
+      // blur by shrinking in halves (one big jump skips pixels and leaves beads along thin lines), then scaling back up smoothly
+      const soft = (E, d) => { let o = E; for (let f = 2; f <= d; f *= 2) { const n = document.createElement('canvas'); n.width = Math.ceil(w / f); n.height = Math.ceil(h / f); const nq = n.getContext('2d'); nq.imageSmoothingEnabled = true; nq.imageSmoothingQuality = 'high'; nq.drawImage(o, 0, 0, n.width, n.height); o = n; }
+        const F2 = document.createElement('canvas'); F2.width = w; F2.height = h; const f = F2.getContext('2d'); f.imageSmoothingEnabled = true; f.imageSmoothingQuality = 'high'; f.drawImage(o, 0, 0, w, h); return F2; };
+      const add = (L, a) => { c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = a; c.drawImage(L, 0, 0); c.restore(); };
+      { const g = c.createRadialGradient(tx, h - 0.9 * k, 0, tx, h - 0.9 * k, 3.2 * k); g.addColorStop(0, 'rgba(24,48,66,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }   // a faint deep-blue depth behind the word
+      const tg = c.createLinearGradient(tx - tw / 2, h - 1.9 * k, tx + tw / 2, h); tg.addColorStop(0, '#16191d'); tg.addColorStop(0.5, '#0d0f11'); tg.addColorStop(1, '#121416'); c.fillStyle = tg; c.fillText('charge', tx, ty);   // dark glass faces
+      const fadeA = c.createRadialGradient(tx - 0.4 * k, h - 1.5 * k, 0, tx - 0.4 * k, h - 1.5 * k, 3.4 * k); fadeA.addColorStop(0, 'rgba(0,0,0,1)'); fadeA.addColorStop(0.55, 'rgba(0,0,0,.55)'); fadeA.addColorStop(1, 'rgba(0,0,0,0)');
+      const fadeB = c.createLinearGradient(0, h - 2.0 * k, 0, h - 0.1 * k); fadeB.addColorStop(0, 'rgba(0,0,0,.9)'); fadeB.addColorStop(1, 'rgba(0,0,0,0)');
+      const cyan = c.createLinearGradient(tx - tw / 2, 0, tx + tw / 2, 0); cyan.addColorStop(0, '#9fe6ff'); cyan.addColorStop(0.5, '#e9fbff'); cyan.addColorStop(1, '#bff0dc');
+      const lit = edge(-0.014 * k, -0.014 * k, 0.0055 * k, cyan, fadeA), side = edge(0.012 * k, 0, 0.0045 * k, hg, fadeB);
+      add(soft(lit, 12), 0.9); add(soft(lit, 4), 0.6); add(soft(side, 10), 0.5);    // a breath of glow around each line
+      add(lit, 1); add(lit, 0.6); add(side, 0.8);                               // the lines themselves
+      if ('letterSpacing' in c) c.letterSpacing = '0px';
+    });
+    PL(2 * BW + 0.5, CEIL, new T.MeshStandardMaterial({ map: mt, roughness: 0.85, metalness: 0.05, emissive: 0xffffff, emissiveMap: mt, emissiveIntensity: 0.55 }), 0, CEIL / 2, WALL + 0.006); }
   const LX = -BW - 1.3; PL(15, CEIL, wallL, LX, CEIL / 2, WALL + 7.5, 0, Math.PI / 2);
   for (const y of [1.72, 2.02]) PL(15, 0.14, S(0x2c4f9c, 0.7), LX + 0.006, y, WALL + 7.5, 0, Math.PI / 2);
   box(0.24, 0.15, 15, S(0xd3ad1c, 0.7), LX + 0.12, 0.075, WALL + 7.5, E);
@@ -1827,9 +1875,36 @@ const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () 
   const glow = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff3dc, emissiveIntensity: 2.2 });
   for (const x of [-7.8, 7.8, 13]) box(1.2, 0.05, 0.1, glow, x, CEIL - 0.25, WALL + 0.07, E);
   for (const x of [-BW, BW]) box(1.2, 0.04, 0.1, glow, x, CEIL - 0.03, 2.6, E);
-  // sign: the ChargePoint mark alone, cut through the face of a slim dark panel and lit from the recess behind it
-  box(3.7, 0.7, 0.03, S(0x0c0d0e, 0.45, 0.3), 0, 2.52, WALL + 0.02, E);
-  { const SWd = 3.7, SHt = 0.7, MH = 0.5, MW = MH * 320 / 286, zb = WALL + 0.036, zp = WALL + 0.045;
+  // header: one brand-gradient light line across the wall, a backlit ChargePoint mark and wordmark, and a quiet tagline
+  { const hc = document.createElement('canvas'); hc.width = 2048; hc.height = 400; const ht = new T.CanvasTexture(hc); ht.encoding = T.sRGBEncoding; ht.anisotropy = 8;
+    PL(2.6, 2.6 * 400 / 2048, new T.MeshBasicMaterial({ map: ht, transparent: true, toneMapped: false }), 0, 2.84, WALL + 0.012);   // raised into the clear band above the columns
+    const paintHead = () => { if (!cpParts.mark || !cpParts.word) { setTimeout(paintHead, 150); return; }
+      const p = hc.getContext('2d'); p.clearRect(0, 0, 2048, 400);
+      const mh = 84, mw = mh * 320 / 286, wh = 45, ww = wh * 1100 / 86, gap = 30, x0 = 1024 - (mw + gap + ww) / 2, cy = 172;   // about 80 per cent of the capsule's width, with clear air above it
+      p.globalAlpha = 0.86; p.drawImage(cpParts.mark, x0, cy - mh / 2, mw, mh); p.drawImage(cpParts.word, x0 + mw + gap, cy - wh / 2, ww, wh); p.globalAlpha = 1;   // printed, not lit: no glow, a touch below full white
+      // the line as a capsule, read like a prompt: + Plug in | Come back full. A brand-gradient cursor, and a beam of light spilling from it
+      { const F = '"Helvetica Neue",Helvetica,Arial,sans-serif', FS = 64, PH2 = 124, t1 = 'Plug in', t2 = 'Come back full.';
+        // measure first, then size the capsule to hug its content with equal padding left and right, centred under the logo
+        p.font = `700 ${FS}px ${F}`; if ('letterSpacing' in p) p.letterSpacing = `${-0.05 * FS}px`;
+        const w1 = p.measureText(t1).width, w2 = p.measureText(t2).width, BW2 = 32, PAD = 50;
+        const inner = BW2 + 24 + w1 + 28 + 26 + w2, PW2 = Math.round(inner + 2 * PAD), px = 1024 - PW2 / 2, py = 322 - PH2 / 2, rr = PH2 / 2;
+        const cap = () => { p.beginPath(); p.moveTo(px + rr, py); p.arcTo(px + PW2, py, px + PW2, py + PH2, rr); p.arcTo(px + PW2, py + PH2, px, py + PH2, rr); p.arcTo(px, py + PH2, px, py, rr); p.arcTo(px, py, px + PW2, py, rr); p.closePath(); };
+        const bg = p.createLinearGradient(0, py, 0, py + PH2); bg.addColorStop(0, '#202024'); bg.addColorStop(1, '#0e0e10'); cap(); p.fillStyle = bg; p.fill();
+        p.strokeStyle = 'rgba(255,255,255,.10)'; p.lineWidth = 2; p.stroke();
+        p.font = `700 ${FS}px ${F}`; p.textAlign = 'left'; p.textBaseline = 'middle'; if ('letterSpacing' in p) p.letterSpacing = `${-0.05 * FS}px`;
+        // a small lightning bolt, the universal sign for charging, in the brand gradient
+        const plus = px + PAD + BW2 / 2, bg2 = p.createLinearGradient(0, 296, 0, 348); bg2.addColorStop(0, BRAND.a); bg2.addColorStop(1, BRAND.b); p.fillStyle = bg2;
+        p.beginPath(); p.moveTo(plus + 6, 294); p.lineTo(plus - 16, 326); p.lineTo(plus - 1, 326); p.lineTo(plus - 6, 350); p.lineTo(plus + 16, 316); p.lineTo(plus + 1, 316); p.closePath(); p.lineJoin = 'round'; p.fill();
+        const x1 = plus + BW2 / 2 + 24; p.fillStyle = '#f5f5f7'; p.fillText(t1, x1, 324); const cx = x1 + w1 + 28;
+        const beam = (x, y) => { p.save(); cap(); p.clip(); p.globalCompositeOperation = 'lighter'; p.translate(x, y); p.scale(3, 1);   // light fans out from the cursor and stays inside the capsule
+          const g = p.createRadialGradient(0, 0, 0, 0, 0, 130); g.addColorStop(0, 'rgba(141,198,63,.7)'); g.addColorStop(0.35, 'rgba(59,169,224,.32)'); g.addColorStop(1, 'rgba(0,0,0,0)'); p.fillStyle = g; p.fillRect(0, -140, 200, 280); p.restore(); };
+        beam(cx + 6, 322);
+        const cg = p.createLinearGradient(0, 278, 0, 366); cg.addColorStop(0, BRAND.a); cg.addColorStop(1, BRAND.b); p.fillStyle = cg; p.fillRect(cx - 3, 278, 6, 88);
+        const x2 = cx + 26, fg = p.createLinearGradient(x2, 0, x2 + w2, 0); fg.addColorStop(0, '#f5f5f7'); fg.addColorStop(1, '#6e6e73');
+        p.fillStyle = fg; p.fillText(t2, x2, 324); if ('letterSpacing' in p) p.letterSpacing = '0px'; }
+      ht.needsUpdate = true; draw(); };
+    paintHead(); }
+  if (false) { const SWd = 3.7, SHt = 0.7, MH = 0.5, MW = MH * 320 / 286, zb = WALL + 0.036, zp = WALL + 0.045;
     const pc = document.createElement('canvas'); pc.width = 2048; pc.height = 388; const pt = new T.CanvasTexture(pc); pt.encoding = T.sRGBEncoding; pt.anisotropy = 8;
     const gc = document.createElement('canvas'); gc.width = 560; gc.height = 500; const gt = new T.CanvasTexture(gc); gt.encoding = T.sRGBEncoding; gt.anisotropy = 8;
     const plate = PL(SWd, SHt, new T.MeshStandardMaterial({ map: pt, alphaTest: 0.5, roughness: 0.45, metalness: 0.3 }), 0, 2.52, zp); plate.castShadow = false;
@@ -1844,8 +1919,7 @@ const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () 
       q.shadowColor = '#bfe9ff'; q.shadowBlur = 16; for (let i = 0; i < 3; i++) q.drawImage(cpParts.mark, 280 - gw / 2, 250 - gh / 2, gw, gh);   // widened so the recess stays lit from an angle
       q.shadowBlur = 0; q.globalCompositeOperation = 'lighter'; q.globalAlpha = 0.5; q.drawImage(cpParts.mark, 280 - gw / 2, 250 - gh / 2, gw, gh); q.globalAlpha = 1; q.globalCompositeOperation = 'source-over'; gt.needsUpdate = true; draw(); };
     paintSign(); }
-  { const m = labelMat('EV Charging', '#f5f5f7'), lm = new T.MeshBasicMaterial({ map: m.map, transparent: true, toneMapped: false }); PL(0.92, 0.92 * 160 / 1024, lm, 1.32, 2.515, WALL + 0.047); }
-  box(3.7, 0.022, 0.03, M.gradH, 0, 2.14, WALL + 0.045, E);
+
   // aisle blade: the mark on both faces, hung from the soffit so drivers see it along the lane
   { const zb = Z0 + BL + 1.3; box(0.62, 0.62, 0.05, S(0x0c0d0e, 0.45, 0.3), 0, CEIL - 0.75, zb, E).rotation.y = Math.PI / 2;
     for (const sz of [-0.22, 0.22]) box(0.015, 0.45, 0.015, M.steel, 0, CEIL - 0.22, zb + sz, E);
@@ -1856,10 +1930,10 @@ const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () 
     ['Site', 'Basement car park, Al Wahda Mall, Abu Dhabi. Layout simplified from one site photo', P],
     ['Bays', '2, shown at 2,600 × 5,200 mm each. To be confirmed by survey', P],
     ['Chargers', 'Two wall-mounted single-gun AC units, one at the head of each bay, 2 × 22 kW Type 2, attached cables', P],
-    ['Wall relief', 'Behind each charger, a 35 mm satin-graphite relief in the outline of the post and one-piece strut cover: a 260 mm pilaster flaring to 1,100 mm at the sign line. It could equally be painted', P],
-    ['Screen', 'One rounded display on the wall between the two chargers, 460 × 300 mm. Live status for bay 01 (A) and bay 02 (B), alternating with the animated ChargePoint logo', P],
+    ['Bay columns', 'Behind each charger, the family silhouette in a 35 mm satin-graphite relief: a 260 mm post rising into a cover that flares to 1,240 mm at 2,220 mm, capped by a 1,300 mm black shade with the brand light along its front edge. Bay number (01, 02) and 22 kW · Type 2 on the cover face', P],
+    ['Screen', 'One rounded display on the wall between the two chargers, 640 × 400 mm, centred 1,550 mm above the floor. Live status for bay 01 (A) and bay 02 (B), alternating with the animated ChargePoint logo', P],
     ['Protection', 'Two guard bollards in front of each charger and one wheel stop per bay', P],
-    ['Wall sign', 'Dark panel, 3,700 × 700 mm, on a graphite feature wall: the ChargePoint mark alone, engraved through the face and lit from behind', P],
+    ['Wall', 'One matt black feature wall. Across the top, a backlit ChargePoint mark and wordmark, and a capsule that reads like a prompt: + Plug in | Come back full., Helvetica bold, tracking −50, with a brand-gradient cursor and a beam of light. Behind it, a near-black wall with the word “charge” in huge dark-grey lowercase cropped by the floor', P],
     ['Aisle sign', 'Double-sided blade hung from the soffit', P],
     ['Floor', 'Graphite bay fields, gradient hairline, bay numbers 01 and 02, one guide line along the aisle', P]
   ];
@@ -2166,7 +2240,7 @@ const TEXT = {
   column: ['Core', 'Core', 'One column, and everything is built on it. Start from the post alone, then add a charger (Blade 1, Blade 2 or Ray 60), a roof (a one-module shade, or a Halo bay at half or full depth) and a screen. Every combination uses the same post, the same finishes and the same lights.'],
   acSolo: ['Single unit', 'AC Solo: single-gun post', 'The AC post with one charger only: a single 22 kW unit centred on the front of the original slim post, with one holster and one cable. One canopy bay, no batteries; full depth as standard, or half depth with the Half-depth switch. Every other option works as on the AC post.'],
   dc60: ['Single unit', 'DC 60 post with solar shade', 'The Schneider EVlink Pro DC 60, rebranded for ChargePoint, mounted on the original slim post with no battery. One solar module forms a small shade over the charger and the driver. With only one module to carry, the three struts are gone: the post holds the roof on its own. A rounded live screen sits on the charger front.'],
-  awm: ['Project', 'Al Wahda Mall, Abu Dhabi', 'Two basement bays at Al Wahda Mall, drawn from a site photo with the cars cleared. Each bay has its own charger hung on the wall, set on a graphite relief shaped like the family’s post and one-piece cover, with one rounded live screen on the wall between them. An engraved, back-lit ChargePoint mark sits on a graphite feature wall, a blade sign hangs over the aisle, and the bays are repainted: dark fields, one gradient line, a number and a single glyph.'],
+  awm: ['Project', 'Al Wahda Mall, Abu Dhabi', 'Two basement bays at Al Wahda Mall, drawn from a site photo with the cars cleared. Each bay has its own charger hung on the wall inside the family silhouette: a slim post rising into a flared cover and a shade with the brand light, the bay number on the cover, and one rounded live screen on the wall between them. A gradient light line and a backlit ChargePoint mark and wordmark run across the top of the matt black wall, a blade sign hangs over the aisle, and the bays are repainted: dark fields, one gradient line, a number and a single glyph.'],
   main: ['Configuration A', 'Main solar canopy', 'The full-size canopy, kept exactly to the original geometry: four bays, six panels deep, one column per bay. Each column holds a 45 kWh battery (with built-in inverter) behind a flush rear door, and two standalone AC chargers stand under the roof, one for each pair of bays.'],
   ac:   ['Configuration B', 'AC charging canopy', 'Two bays at the full original roof depth. A double-gun AC pedestal (two EVlink Pro AC units) stands between the bays, one cable for each car. Each column holds a 45 kWh battery (90 kWh in total).'],
   dc:   ['Configuration C', 'DC fast-charging canopy', 'Four bays at the full original roof depth, with two ChargePoint DC 180 chargers (based on the Schneider EVlink Pro DC 180), each serving a pair of bays at up to 180 kW. The four columns store 180 kWh, so the chargers can run at full power on a smaller grid connection.'],
@@ -2736,17 +2810,19 @@ const capText = cap > 0 ? `${cap.toLocaleString('en-US')} spaces (mapped)` : est
 let rot = Math.round(((-ang * 180 / Math.PI) % 180 + 180) % 180);
 return { i, lat: lat0, lon: lon0, area, kind, capText, rot, ring, name: tags.name || '', label: tags.name || `${kind} car park` };
 }
-function probe(center, zoom, read, tries = 2) { return probe1(center, zoom, read).catch(e => tries > 1 ? new Promise(r => setTimeout(r, 800)).then(() => probe(center, zoom, read, tries - 1)) : Promise.reject(e)); }   // the free tile server is sometimes slow: one retry
-const PRB = { m: null, box: null, q: Promise.resolve() };
-function probe1(center, zoom, read) { const job = PRB.q.then(() => new Promise((res, rej) => {
-if (!PRB.m) { const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:1000px;height:800px;visibility:hidden;pointer-events:none'; document.body.appendChild(box); PRB.box = box;
-try { PRB.m = new maplibregl.Map({ container: box, style: STREETS, center, zoom, interactive: false, attributionControl: false, fadeDuration: 0 }); } catch (e) { box.remove(); PRB.box = null; rej(e); return; } }
-const m = PRB.m; let fin = false;
-const t = setTimeout(() => { if (fin) return; fin = true; try { m.remove(); } catch (x) {} if (PRB.box) PRB.box.remove(); PRB.m = null; PRB.box = null; rej(new Error('tiles timeout')); }, 20000);
-const go = () => { if (fin) return; fin = true; clearTimeout(t); try { res(read(m)); } catch (e) { rej(e); } };
-m.once('idle', go); m.jumpTo({ center, zoom });
-const chk = () => { if (fin) return; if (m.isStyleLoaded() && m.areTilesLoaded() && !m.isMoving()) setTimeout(() => { if (!fin && m.areTilesLoaded()) go(); }, 250); else setTimeout(chk, 300); }; setTimeout(chk, 400); }));
-PRB.q = job.catch(() => {}); return job; }
+function probe(center, zoom, read, tries = 2) { return probe1(center, zoom, read).catch(e => tries > 1 ? new Promise(r => setTimeout(r, 800)).then(() => probe(center, zoom, read, tries - 1)) : Promise.reject(e)); }
+  // one hidden map, kept and reused for every read (creating and destroying a map per read jams the map library after a few dozen);
+  // reads take turns, and a map that stops answering is replaced
+  const PRB = { m: null, box: null, q: Promise.resolve() };
+  function probe1(center, zoom, read) { const job = PRB.q.then(() => new Promise((res, rej) => {
+    if (!PRB.m) { const box = document.createElement('div'); box.style.cssText = 'position:fixed;left:-4000px;top:0;width:1000px;height:800px;visibility:hidden;pointer-events:none'; document.body.appendChild(box); PRB.box = box;
+      try { PRB.m = new maplibregl.Map({ container: box, style: STREETS, center, zoom, interactive: false, attributionControl: false, fadeDuration: 0 }); } catch (e) { box.remove(); PRB.box = null; rej(e); return; } }
+    const m = PRB.m; let fin = false;
+    const t = setTimeout(() => { if (fin) return; fin = true; try { m.remove(); } catch (x) {} if (PRB.box) PRB.box.remove(); PRB.m = null; PRB.box = null; rej(new Error('tiles timeout')); }, 20000);
+    const go = () => { if (fin) return; fin = true; clearTimeout(t); try { res(read(m)); } catch (e) { rej(e); } };
+    m.once('idle', go); m.jumpTo({ center, zoom });
+    const chk = () => { if (fin) return; if (m.isStyleLoaded() && m.areTilesLoaded() && !m.isMoving()) setTimeout(() => { if (!fin && m.areTilesLoaded()) go(); }, 250); else setTimeout(chk, 300); }; setTimeout(chk, 400); }));
+    PRB.q = job.catch(() => {}); return job; }
 const hull = pts => { pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (pts.length < 3) return null;
 const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
 for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
