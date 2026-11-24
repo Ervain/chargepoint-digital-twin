@@ -43,6 +43,7 @@
     }
 
     async function detect(map, ctr, p) {
+      const G2 = window.TwinGeo;
       const mpp = 156543.034 * Math.cos(ctr[1] * Math.PI / 180) / 2 ** Z;            // metres per pixel
       // footprint: a picked car park's outline or lanes, else 75 m around the pin
       const lot = p && p.lot ? p.lot : null, R = 75 / mpp;
@@ -90,6 +91,20 @@
         const gx = gray[i - w + 1] + 2 * gray[i + 1] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - 1] - gray[i + w - 1];
         const gy = gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1];
         G[i] = Math.min(255, Math.hypot(gx, gy)); M[i] = 1; nM++; }
+      // segmentation of the photo, pixel by pixel: vegetation by the excess-green index ExG = 2G − R − B (trees, grass, palms),
+      // painted lines as pixels clearly brighter than their 2 m surroundings and white or yellow (bay dividers, kerbs, arrows)
+      const VEG = new Uint8Array(WH), PAINT = new Uint8Array(WH), IG = new Float64Array((w + 1) * (h + 1));
+      for (let y = 0; y < h; y++) { let rs = 0; for (let x = 0; x < w; x++) { rs += gray[y * w + x]; IG[(y + 1) * (w + 1) + x + 1] = IG[y * (w + 1) + x + 1] + rs; } }
+      const pr2 = Math.max(3, Math.round(1 / mpp));
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x, r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2];
+        if (g > r + 14 && g > b + 10 && 2 * g - r - b > 32 && g > 50 && r + g + b < 480) VEG[i] = 1;
+        if (!M[i]) continue; const xa = Math.max(0, x - pr2), xb = Math.min(w, x + pr2 + 1), ya = Math.max(0, y - pr2), yb = Math.min(h, y + pr2 + 1);
+        const mean = (IG[yb * (w + 1) + xb] - IG[ya * (w + 1) + xb] - IG[yb * (w + 1) + xa] + IG[ya * (w + 1) + xa]) / ((xb - xa) * (yb - ya));
+        if (gray[i] > mean + 22 && ((Math.min(r, g, b) > 135) || (r > 150 && g > 125 && b < 110))) PAINT[i] = 1; }
+      const GF = G2.frame(ctr[0], ctr[1]), BLD = OBST.blds.map(r => { const P = r.map(q => GF.toLocal(q[0], q[1])); let a = 1e9, b = 1e9, c = -1e9, d = -1e9; P.forEach(([x, y]) => { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }); return { P, bb: [a, b, c, d] }; });
+      const bldShare = ring => { const P = ring.slice(0, 4).map(q => GF.toLocal(q[0], q[1])); let a = 1e9, b = 1e9, c = -1e9, d = -1e9; P.forEach(([x, y]) => { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); });
+        let s = 0; BLD.forEach(q => { if (q.bb[0] > c || q.bb[2] < a || q.bb[1] > d || q.bb[3] < b) return; try { s += G2.overlapArea(P, q.P); } catch (e) {} }); return s / (G2.area(P) || 1); };
+      const FILT = window._lvFilt = { bld: 0, veg: 0, paved: 0, vegPx: VEG.reduce((a, b) => a + b, 0), paintPx: PAINT.reduce((a, b) => a + b, 0), WH };
       if (nM < 2000) { hint('Lane Vision found no open parking area here. Move the pin onto the car park and try again.'); return; }
       // 2. parking blocks: the paved area split into separate pieces (2 m cells, joined side to side), each read on its own,
       //    so two car parks at different angles each get their own direction
@@ -100,7 +115,7 @@
           [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => { const nx = cx2 + dx, ny = cy2 + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) return; const o = ny * gw + nx; if (cellOn[o] && lab[o] < 0) { lab[o] = k; q.push(o); } }); }
         comps.push({ k, n, box: [bx0 * cs, by0 * cs, Math.min(w, (bx1 + 1) * cs), Math.min(h, (by1 + 1) * cs)] }); }
       const inC = (k, x, y) => M[y * w + x] && lab[((y / cs) | 0) * gw + ((x / cs) | 0)] === k;
-      const bin = 0.5 / mpp, out = { rows: [], bays: [], aisles: [] }, runs = []; let spaces = 0, kept = 0; const dbg = window._lvDbg = { nM, warm0, lum0, comps: comps.length, blocks: [] };
+      const bin = 0.5 / mpp, out = { rows: [], bays: [], aisles: [], blocks: [] }, runs = []; let spaces = 0, kept = 0; const dbg = window._lvDbg = { nM, warm0, lum0, comps: comps.length, blocks: [] };
       comps.filter(c => c.n * (cs * mpp) ** 2 >= 220).sort((p, q) => q.n - p.n).slice(0, 12).forEach(cp => {
         const [X0, Y0, X1, Y1] = cp.box, D = Math.hypot(w, h);
         // 3. orientation by a Radon-style projection: the angle whose cross-profile of edge strength bands most strongly
@@ -112,7 +127,28 @@
           const m = sm.reduce((a, b) => a + b, 0) / sm.length; return Math.sqrt(sm.reduce((a, b) => a + (b - m) ** 2, 0) / sm.length) / (m || 1); };
         let best = 0, bestA = 0; for (let d = 0; d < 180; d += 3) { const c = contrast(profileAt(d * Math.PI / 180, 3)); if (c > best) { best = c; bestA = d; } }
         for (let d = bestA - 3; d <= bestA + 3; d++) { const c = contrast(profileAt(d * Math.PI / 180, 2)); if (c > best) { best = c; bestA = d; } }
-        const db = { n: cp.n, best: +best.toFixed(3), ang: bestA, rows: 0, segs: 0, pk: [] }; dbg.blocks.push(db); if (best < 0.12) return;
+        const db = { n: cp.n, best: +best.toFixed(3), ang: bestA, rows: 0, segs: 0, pk: [] }; dbg.blocks.push(db);
+        // the block's own outline by rotating calipers (minimum-area rectangle of its cells), drawn and used as a second opinion on direction
+        const cellPts = []; for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) if (lab[gy * gw + gx] === cp.k) { const x = gx * cs, y = gy * cs; cellPts.push([x, y], [x + cs, y], [x, y + cs], [x + cs, y + cs]); }
+        const mar = G2.minAreaRect(cellPts); if (mar) { db.mar = +mar.angle.toFixed(1); db.aspect = +mar.aspect.toFixed(2); }
+        // Hough transform of the painted lines in this block: the long lines that run with the rows refine the angle to a fraction of a degree,
+        // the short dividers across them give the bay angle (90° straight in, 45–75° angled parking)
+        const pp = []; for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) if (PAINT[y * w + x] && inC(cp.k, x, y)) pp.push([(x - (X0 + X1) / 2) * mpp, (y - (Y0 + Y1) / 2) * mpp]);
+        const step = Math.max(1, Math.ceil(pp.length / 6000)), HA = pp.length > 60 ? G2.houghAngles(pp.filter((_, i) => i % step === 0), { dR: 0.3, minVotes: Math.max(8, Math.round(2 / mpp / step)), top: 6 }).map(q => ({ dir: G2.lineDir(q.theta), score: q.score })) : [];
+        db.paint = pp.length; db.hough = HA.slice(0, 3).map(q => +q.dir.toFixed(1));
+        if (best < 0.12) { const pm = mar && mar.aspect >= 2.2 && HA.find(q => G2.angDiff(q.dir, mar.angle) < 6); if (!pm) return; best = 0.12; bestA = pm.dir; db.fallback = 'calipers+hough'; }
+        else { const along = HA.find(q => G2.angDiff(q.dir, bestA) < 4); if (along) { bestA = ((along.dir % 180) + 180) % 180; db.refined = +bestA.toFixed(2); } }
+        // bay angle: each candidate (straight in, and every angled direction the Hough found) is tested by shearing the painted pixels
+        // so that dividers of that slope collapse onto single points along the row; the right slope gives the sharpest histogram (a sheared Radon test)
+        const a1 = bestA * Math.PI / 180, c1 = Math.cos(a1), s1 = Math.sin(a1), PV = pp.map(([x, y]) => [x * c1 + y * s1, -x * s1 + y * c1]);
+        const sharp = sh => { if (PV.length < 60) return 0; const H = new Map(); PV.forEach(([u, v]) => { const k = Math.round((u - sh * v) / 0.25); H.set(k, (H.get(k) || 0) + 1); });
+          const vals = [...H.values()], m = vals.reduce((x, y) => x + y, 0) / vals.length; return Math.sqrt(vals.reduce((x, y) => x + (y - m) ** 2, 0) / vals.length) / (m || 1); };
+        const cands = [{ shear: 0, al: 90, sc: sharp(0) }];
+        HA.forEach(q => { const al = G2.angDiff(q.dir, bestA); if (al < 35 || al > 80) return; const t = (q.dir - bestA) * Math.PI / 180; if (Math.abs(Math.sin(t)) < 0.2) return; const sh = Math.cos(t) / Math.sin(t); cands.push({ shear: sh, al, sc: sharp(sh) }); });
+        cands.sort((x, y) => y.sc - x.sc);
+        const win = cands[0].shear && cands[0].sc > cands.find(c => !c.shear).sc * 1.15 ? cands[0] : cands.find(c => !c.shear);   // angled only when clearly sharper
+        const shear = win.shear, div = { dir: bestA + win.al }; db.shear = +shear.toFixed(3); db.cands = cands.map(c => [Math.round(c.al), +c.sc.toFixed(2)]); if (shear) db.bayAngle = +win.al.toFixed(1);
+        if (mar) out.blocks.push(mar.corners.concat([mar.corners[0]]).map(([x, y]) => toLL(x + ph.ox, y + ph.oy)));
         const a = bestA * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), pr = profileAt(a, 1), nb = pr.nb;
         const val = new Float64Array(nb); for (let b = 0; b < nb; b++) val[b] = pr.N[b] > 6 ? pr.S2[b] / pr.N[b] : NaN;
         const sm = Array.from(val, (v, i) => { let s = 0, n = 0; for (let k = -3; k <= 3; k++) { const q = val[i + k]; if (q === q && q !== undefined) { s += q; n++; } } return n ? s / n : NaN; });
@@ -148,13 +184,18 @@
             let ph0 = 0, phs = -1; for (let o = 0; o < lag; o++) { let s = 0; for (let i = o; i < P.length; i += lag) s += P[i]; if (s > phs) { phs = s; ph0 = o; } }
             const uStart = (k0 + ph0) * q - D, n = Math.floor(((k1 - k0 - ph0) * 0.25) / bayM);
             // 5. every bay checked on its own: at least 55% of it must be paved car park, else it is dropped
-            const ok = []; for (let j = 0; j < n; j++) { const a0 = uStart + j * bp, a1 = a0 + bp; let t = 0, gd = 0;
-              for (let su = 0.15; su < 1; su += 0.23) for (let sv = 0.12; sv < 1; sv += 0.19) { t++; if (inside(a0 + su * (a1 - a0), v0 + sv * (v1 - v0))) gd++; } ok.push(gd / t >= 0.55); }
+            const vm = (v0 + v1) / 2, sh = v => shear * (v - vm), vegAt = (u, v) => { const x = Math.round(u * ca - v * sa), y = Math.round(u * sa + v * ca); return x >= 0 && y >= 0 && x < w && y < h && VEG[y * w + x] && G[y * w + x] > 28; };
+            const ringOf = (a0, a1) => [toMap(a0 + sh(v0), v0), toMap(a1 + sh(v0), v0), toMap(a1 + sh(v1), v1), toMap(a0 + sh(v1), v1), toMap(a0 + sh(v0), v0)];
+            // 6. obstacle filter: a bay is dropped when more than 15% of it is tree canopy in the photo (green and textured, so green paint does not count), or more than 10% lies under a mapped
+            //    building (exact polygon overlap by Sutherland–Hodgman clipping)
+            const ok = []; for (let j = 0; j < n; j++) { const a0 = uStart + j * bp, a1 = a0 + bp; let t = 0, gd = 0, vg = 0;
+              for (let su = 0.15; su < 1; su += 0.23) for (let sv = 0.12; sv < 1; sv += 0.19) { t++; const vv = v0 + sv * (v1 - v0), uu = a0 + su * (a1 - a0) + sh(vv); if (inside(uu, vv)) gd++; if (vegAt(uu, vv)) vg++; }
+              let good = gd / t >= 0.55; if (!good) FILT.paved++; if (good && vg / t > 0.15) { good = false; FILT.veg++; } if (good && BLD.length && bldShare(ringOf(a0, a1)) > 0.10) { good = false; FILT.bld++; } ok.push(good); }
             let j = 0; while (j < n) { if (!ok[j]) { j++; continue; } let e = j; while (e + 1 < n && ok[e + 1]) e++; const cnt = e - j + 1;
               if (cnt >= 3) { const u0 = uStart + j * bp, u1 = uStart + (e + 1) * bp, bays = [];
-                for (let t = j; t <= e; t++) { const a0 = uStart + t * bp, a1 = a0 + bp, bb = { ring: [toMap(a0, v0), toMap(a1, v0), toMap(a1, v1), toMap(a0, v1), toMap(a0, v0)], c: toMap((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }; bays.push(bb); out.bays.push(bb); }
-                const ring = [toMap(u0, v0), toMap(u1, v0), toMap(u1, v1), toMap(u0, v1), toMap(u0, v0)]; out.rows.push(ring); spaces += cnt;
-                const run = { v0, v1, u0, u1, ring, bays, comp: cp.k, rot: Math.round(((-bestA) % 180 + 180) % 180), bayM, toMap }; runs.push(run); cRuns.push(run); }
+                for (let t = j; t <= e; t++) { const a0 = uStart + t * bp, a1 = a0 + bp, bb = { ring: ringOf(a0, a1), c: toMap((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }; bays.push(bb); out.bays.push(bb); }
+                const ring = ringOf(u0, u1); out.rows.push(ring); spaces += cnt;
+                const run = { v0, v1, u0, u1, ring, bays, comp: cp.k, rot: Math.round(((-bestA) % 180 + 180) % 180), bayM, toMap, shear, bayAngle: shear ? Math.round(win.al) : 90 }; runs.push(run); cRuns.push(run); }
               j = e + 1; } }); });
         // driving lanes: the smooth gap between two neighbouring rows of this block
         cRuns.sort((p, q2) => p.v0 - q2.v0);
@@ -170,15 +211,18 @@
         capText: `about ${spaces.toLocaleString('en-US')} spaces in ${out.rows.length} rows, read from the satellite photo` } });
       LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp, obst: OBST, lot: lot || null }; hookMap(map); tools.hidden = false; draw(map, out);
       const bw = nearest.bayM.toFixed(2);
-      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays measured ${bw} m wide). Rows were kept only where the photo shows the regular rhythm of parking bays.`);
+      const ang = runs.filter(r => r.shear).length, dropped = FILT.bld + FILT.veg; dbg.filtered = FILT;
+      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays ${bw} m wide${nearest.shear ? `, angled at ${nearest.bayAngle}°` : ''}).${ang ? ` ${ang} row${ang > 1 ? 's' : ''} of angled parking.` : ''}${dropped ? ` ${dropped} bay${dropped > 1 ? 's' : ''} left out under trees or buildings.` : ''}`);
     }
 
     // ---- drawing, in the style of a site design: every bay a white rectangle, the charging bays green with a badge, lanes dashed ----
     let LVS = null, badges = [];
     const fc = (arr, type) => ({ type: 'FeatureCollection', features: arr.map((c, i) => ({ type: 'Feature', properties: { i }, geometry: { type, coordinates: type === 'Polygon' ? [c] : c } })) });
     function draw(map, out) {
-      const ids = ['lv-row', 'lv-bay', 'lv-ev', 'lv-evl', 'lv-aisle', 'lv-hov'];
-      const add = () => { ids.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); }); ['lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
+      const ids = ['lv-blk', 'lv-row', 'lv-bay', 'lv-ev', 'lv-evl', 'lv-aisle', 'lv-hov'];
+      const add = () => { ids.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); }); ['lv-k', 'lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
+        map.addSource('lv-k', { type: 'geojson', data: fc((out.blocks || []).map(r => r), 'LineString') });
+        map.addLayer({ id: 'lv-blk', type: 'line', source: 'lv-k', paint: { 'line-color': '#8DC63F', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.9 } });
         map.addSource('lv-r', { type: 'geojson', data: fc(out.rows, 'Polygon') }); map.addSource('lv-b', { type: 'geojson', data: fc([], 'Polygon') });
         map.addSource('lv-e', { type: 'geojson', data: fc([], 'Polygon') }); map.addSource('lv-a', { type: 'geojson', data: fc(out.aisles, 'LineString') }); map.addSource('lv-h', { type: 'geojson', data: fc([], 'Polygon') });
         map.addLayer({ id: 'lv-row', type: 'fill', source: 'lv-r', paint: { 'fill-color': '#0b0f16', 'fill-opacity': 0.35 } });

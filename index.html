@@ -2831,35 +2831,18 @@ chargers: poi.filter(f => /charging_station/.test(f.properties.subclass || '') &
 roads: tr.filter(f => ROAD_MAIN[f.properties.class]).map(f => ({ w: ROAD_MAIN[f.properties.class], g: f.geometry })) }; });
 const pad = 0.02, bb = [bounds.getSouth() - pad, bounds.getWest() - pad, bounds.getNorth() + pad, bounds.getEast() + pad].map(v => v.toFixed(5)).join(',');
 try { const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
-const q = `[out:json][timeout:5];nwr["amenity"="charging_station"](${bb});out center tags;`;
+const q = `[out:json][timeout:5];(nwr["amenity"="charging_station"](${bb});nwr["power"="substation"](${bb}););out center tags;`;
 const j = await Promise.any(['https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter'].map(u => fetch(u + '?data=' + encodeURIComponent(q), { signal: ctl.signal }).then(r => { if (!r.ok) throw 0; return r.json(); })));
 clearTimeout(t); ctl.abort();
 j.elements.forEach(e => { const la = e.lat || (e.center && e.center.lat), lo = e.lon || (e.center && e.center.lon); if (!la) return; const tg = e.tags || {};
+if (tg.power) { (raw.subs = raw.subs || []).push({ lon: lo, lat: la, v: parseInt(tg.voltage, 10) || 0 }); return; }
 if (!raw.chargers.some(x => Math.hypot((x.lon - lo) * mLon(la), (x.lat - la) * M_LAT) < 40)) raw.chargers.push({ lon: lo, lat: la, name: tg.name || tg.operator || tg.brand || 'Charging station' }); });
 } catch (e) {}
 const uniq = []; raw.chargers.forEach(c => { if (!uniq.some(u => Math.hypot((u.lon - c.lon) * mLon(c.lat), (u.lat - c.lat) * M_LAT) < 120)) uniq.push(c); else { const u = uniq.find(u => Math.hypot((u.lon - c.lon) * mLon(c.lat), (u.lat - c.lat) * M_LAT) < 120); if (/^(Tesla Supercharger|Charging station)$/.test(u.name) && c.name.length > u.name.length) u.name = c.name; } });
 raw.chargers = uniq;
 return raw;
 }
-function scoreLots(lots, raw) {
-const segs = []; raw.roads.forEach(r => { const L = r.g.type === 'LineString' ? [r.g.coordinates] : r.g.type === 'MultiLineString' ? r.g.coordinates : []; L.forEach(l => { for (let i = 0; i < l.length - 1; i++) segs.push([l[i], l[i + 1], r.w]); }); });
-return lots.map(l => {
-const k = mLon(l.lat), d = (lo, la) => Math.hypot((lo - l.lon) * k, (la - l.lat) * M_LAT);
-let dw = 0, nd = 0; const kinds = {};
-raw.dest.forEach(p => { const w = DEST_W[p.k] || DEST_W[p.cl] || 0; if (!w) return; const m = d(p.c[0], p.c[1]); if (m < 400) { dw += w * (1 - m / 520); nd++; kinds[p.k] = (kinds[p.k] || 0) + 1; } });
-let road = 1e9, roadW = 0; segs.forEach(([a, b, w]) => { const ax = (a[0] - l.lon) * k, az = (a[1] - l.lat) * M_LAT, bx = (b[0] - l.lon) * k, bz = (b[1] - l.lat) * M_LAT, vx = bx - ax, vz = bz - az, L2 = vx * vx + vz * vz || 1;
-const t = Math.max(0, Math.min(1, -(ax * vx + az * vz) / L2)), m = Math.hypot(ax + vx * t, az + vz * t) / w; if (m < road) { road = m; roadW = w; } });
-let near = 1e9, nearName = '', n1 = 0; raw.chargers.forEach(c => { const m = d(c.lon, c.lat); if (m < near) { near = m; nearName = c.name; } if (m < 1000) n1++; });
-const spaces = l.area ? Math.round(l.area / 25) : 0;
-const f = { dwell: Math.round(Math.min(100, 100 * Math.log1p(dw) / Math.log1p(160))), road: Math.round(road > 1e8 ? 0 : Math.max(0, Math.min(100, 100 * (1 - (road - 120) / 1400)))),
-gap: Math.round(near > 1e8 ? 100 : Math.max(0, Math.min(100, near / 20))), size: Math.round(Math.min(100, spaces / 3)) };
-const score = Math.round(0.35 * f.dwell + 0.25 * f.gap + 0.2 * f.road + 0.2 * f.size);
-const kind = f.road >= 70 && f.dwell < 55 ? 'dc' : 'ac';
-const bays = Math.max(4, Math.min(40, Math.round((spaces || 120) * 0.03 / 2) * 2));
-const top = Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, c]) => { const nm = DEST_N[n] || [n.replace(/_/g, ' '), n.replace(/_/g, ' ') + 's']; return `${c} ${c === 1 ? nm[0] : nm[1]}`; }).join(', ');
-return Object.assign(l, { score, f, kind, bays, spaces, nd, top, near: near > 1e8 ? null : Math.round(near), nearName, n1 });
-}).sort((a, b) => b.score - a.score);
-}
+const scoreLots = (lots, raw) => TwinGeo.radar(lots, raw, { DEST_W, DEST_N });
 const RADAR = { markers: [] };
 const clearRadar = () => { RADAR.markers.forEach(m => m.remove()); RADAR.markers = []; $d('.tw-board').hidden = true; };
 async function runRadar() {
@@ -2892,7 +2875,7 @@ const h = document.createElement('div'); h.className = 'tw-bd-h'; h.innerHTML = 
 const x = document.createElement('button'); x.type = 'button'; x.className = 'tw-close'; x.setAttribute('aria-label', 'Close the ranking'); x.textContent = '×'; x.addEventListener('click', () => { bd.hidden = true; }); h.appendChild(x); bd.appendChild(h);
 ranked.forEach((l, i) => { const card = document.createElement('div'); card.className = 'tw-bd-card' + (i === 0 ? ' is-top' : ''); card.dataset.i = i;
 card.innerHTML = `<div class="tw-bd-top"><span class="tw-bd-rank">${i + 1}</span><div class="tw-bd-name"><b></b><span></span></div><span class="tw-bd-score" style="--s:${l.score}">${l.score}</span></div>`
-+ `<div class="tw-bd-f">${bar5('Destinations', l.f.dwell)}${bar5('Charging gap', l.f.gap)}${bar5('Main road', l.f.road)}${bar5('Size', l.f.size)}</div>`
++ `<div class="tw-bd-f">${l.fx.map(([n, v]) => bar5(n, v)).join('')}</div>`
 + `<p class="tw-bd-why"></p><div class="tw-bd-go"><button type="button" class="tw-bd-build">Build here</button><span></span></div>`;
 card.querySelector('.tw-bd-name b').textContent = l.label; card.querySelector('.tw-bd-name span').textContent = `${l.kind === 'dc' ? 'DC fast · Halo Ray' : 'AC · Halo'} · start with ${l.bays} bays`;
 card.querySelector('.tw-bd-why').textContent = [l.nd ? `${l.nd} destinations within 400 m${l.top ? ' (' + l.top + ')' : ''}` : 'Few mapped destinations nearby',
@@ -2901,7 +2884,7 @@ card.querySelector('.tw-bd-go span').textContent = i === 0 ? 'Best site in this 
 card.addEventListener('click', ev => { if (ev.target.closest('.tw-bd-build')) return; focusRank(i); });
 card.querySelector('.tw-bd-build').addEventListener('click', () => buildRank(i)); bd.appendChild(card); });
 const note = document.createElement('p'); note.className = 'tw-bd-note';
-note.textContent = 'Scores compare sites from OpenStreetMap data: destinations where drivers stay, main-road access, distance to mapped chargers and car park size. An index for choosing sites, not a revenue forecast. Bays: a starting rule of 3% of spaces.';
+note.textContent = 'Score = weighted sum of: demand (adaptive kernel density of destinations), anchors (gravity pull of malls, hotels and similar), charging gap, main-road access, distance to a mapped substation and car park size, all from OpenStreetMap. A criterion with no data is left out and the weights rescaled. An index for choosing sites, not a revenue forecast. Bays: a starting rule of 3% of spaces.';
 bd.appendChild(note); bd.hidden = false; focusRank(0, true);
 hint(`Best site here: ${ranked[0].label}, score ${ranked[0].score}. Press Build here, or pick another from the ranking.`);
 }

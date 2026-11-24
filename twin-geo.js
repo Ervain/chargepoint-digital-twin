@@ -67,6 +67,122 @@
     count: (S, F) => Math.floor(S / F + 1e-9),
     module: (D, aisle) => 2 * D + aisle };
 
+
+  // ---- 5. shape of a set of points: convex hull (monotone chain) and the minimum-area rectangle by rotating calipers.
+  //      For a convex polygon the smallest enclosing rectangle has one side on a hull edge (Freeman and Shapira 1975),
+  //      so only the n edge directions need testing: area(θ) = (max u − min u)(max v − min v) with u, v the axes at θ.
+  function convexHull(pts) { const P = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]); if (P.length < 3) return P;
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+    for (const p of P) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+    for (let i = P.length - 1; i >= 0; i--) { const p = P[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+    return lo.slice(0, -1).concat(up.slice(0, -1)); }
+  function minAreaRect(pts) { const H = convexHull(pts); if (H.length < 3) return null; let best = null;
+    for (let i = 0; i < H.length; i++) { const a = H[i], b = H[(i + 1) % H.length], L = len(a, b); if (L < 1e-12) continue;
+      const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L; let u0 = 1e18, u1 = -1e18, v0 = 1e18, v1 = -1e18;
+      for (const p of H) { const u = p[0] * ux + p[1] * uy, v = -p[0] * uy + p[1] * ux; if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+      const A = (u1 - u0) * (v1 - v0); if (!best || A < best.area) best = { area: A, ux, uy, u0, u1, v0, v1 }; }
+    const { ux, uy, u0, u1, v0, v1 } = best, P = (u, v) => [u * ux - v * uy, u * uy + v * ux], w = u1 - u0, h = v1 - v0;
+    const ang = Math.atan2(uy, ux), long = w >= h ? ang : ang + Math.PI / 2;
+    return { area: best.area, corners: [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)], length: Math.max(w, h), width: Math.min(w, h),
+      angle: ((long * 180 / Math.PI) % 180 + 180) % 180, aspect: Math.max(w, h) / (Math.min(w, h) || 1e-9) }; }
+
+  // ---- 6. Hough transform for straight lines: every point votes for all lines r = x cos θ + y sin θ through it;
+  //      peaks in the (θ, r) accumulator are the painted lines. Returns the strongest directions with their vote counts.
+  function houghAngles(pts, opt) { opt = opt || {}; const dT = opt.dTheta || 1, dR = opt.dR || 1, nT = Math.round(180 / dT);
+    if (pts.length < 20) return []; let R = 0; pts.forEach(p => { R = Math.max(R, Math.hypot(p[0], p[1])); });
+    const nR = Math.ceil(2 * R / dR) + 1, acc = new Uint32Array(nT * nR), C = [], S = [];
+    for (let t = 0; t < nT; t++) { C.push(Math.cos(t * dT * Math.PI / 180)); S.push(Math.sin(t * dT * Math.PI / 180)); }
+    for (const [x, y] of pts) for (let t = 0; t < nT; t++) acc[t * nR + Math.round((x * C[t] + y * S[t] + R) / dR)]++;
+    // a direction scores by its line peaks (sum of the top cells above a minimum length), so many short dividers count as much as one long kerb
+    const min = opt.minVotes || 12, score = new Float64Array(nT);
+    for (let t = 0; t < nT; t++) { let s = 0; for (let r = 0; r < nR; r++) { const v = acc[t * nR + r]; if (v >= min) s += v * v; } score[t] = s; }
+    const out = []; for (let t = 0; t < nT; t++) { const a = score[(t - 1 + nT) % nT], b = score[t], c = score[(t + 1) % nT]; if (b > 0 && b >= a && b >= c) {
+        const den = a - 2 * b + c, off = den ? 0.5 * (a - c) / den : 0;   // parabolic refinement to a fraction of a degree
+        out.push({ theta: ((t + off) * dT + 180) % 180, score: b }); } }
+    return out.sort((p, q) => q.score - p.score).slice(0, opt.top || 4); }
+  // the line direction from a Hough normal angle θ (lines run at θ + 90°), both in 0..180
+  const lineDir = theta => (theta + 90) % 180;
+  const angDiff = (a, b) => { const d = Math.abs(((a - b) % 180 + 180) % 180); return Math.min(d, 180 - d); };
+
+  // ---- 7. site suitability (Site Radar) ----
+  //  Kernel density of demand at x:  f(x) = Σ wᵢ K(dᵢ / h) / h²  with a Gaussian kernel K(t) = e^(−t²/2) / 2π  and bandwidth h.
+  //  Gravity pull of anchors:         A(x) = Σ Pⱼ / max(dⱼ, d₀)^β
+  //  Weighted linear combination:     S = Σ wₖ Xₖ  over criteria normalised to 0..100, weights summing to 1;
+  //  a criterion with no data (for example the grid when no substation is mapped) is left out and the weights renormalised.
+  const kde = (x, pts, h) => { let s = 0; for (const p of pts) { const d = len(x, p.xy || p), t = d / h; if (t < 4) s += (p.w || 1) * Math.exp(-t * t / 2); } return s / (2 * Math.PI * h * h); };
+  const gravity = (x, pts, beta, d0) => { let s = 0; for (const p of pts) s += (p.w || 1) / Math.pow(Math.max(len(x, p.xy || p), d0 || 50), beta || 2); return s; };
+  function wlc(X, W) { let s = 0, ws = 0; for (const k in W) { if (X[k] === null || X[k] === undefined || !isFinite(X[k])) continue; s += W[k] * X[k]; ws += W[k]; } return ws ? s / ws : 0; }
+  // share of box B (a polygon) covered by a mask, sampled on a grid: |B ∩ M| / |B|. For a small box against a large mask this is the
+  // useful form of intersection over union (the union would be dominated by the mask).
+  function coverShare(poly, inMask, n) { n = n || 6; const [a, b] = [poly[0], poly[1]], d = poly[3]; let hit = 0, t = 0;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const s = (i + 0.5) / n, r = (j + 0.5) / n; const p = [a[0] + (b[0] - a[0]) * s + (d[0] - a[0]) * r, a[1] + (b[1] - a[1]) * s + (d[1] - a[1]) * r]; t++; if (inMask(p)) hit++; }
+    return hit / t; }
+
+
+  // adaptive bandwidth (balloon / k-nearest-neighbour KDE): each source gets hᵢ = RMS distance to its k nearest neighbours,
+  // clamped to [hMin, hMax]. Dense city blocks get a tight kernel, sparse suburbs a wide one, with no fixed radius anywhere.
+  function adaptiveBandwidths(pts, k, hMin, hMax) { k = k || 5; return pts.map((p, i) => { const d = [];
+      for (let j = 0; j < pts.length; j++) if (j !== i) d.push(len(p.xy || p, pts[j].xy || pts[j]));
+      d.sort((a, b) => a - b); const n = Math.min(k, d.length); if (!n) return hMax || 400;
+      const h = Math.sqrt(d.slice(0, n).reduce((s, x) => s + x * x, 0) / n); return Math.max(hMin || 60, Math.min(hMax || 600, h)); }); }
+  const kdeAdaptive = (x, pts, hs) => { let s = 0; pts.forEach((p, i) => { const h = hs[i], t = len(x, p.xy || p) / h; if (t < 4) s += (p.w || 1) * Math.exp(-t * t / 2) / (2 * Math.PI * h * h); }); return s; };
+  // Sutherland–Hodgman: clip polygon P by a convex polygon C (both counter- or clockwise, open rings). Exact overlap area = area(clip).
+  function clipConvex(P, C) { let out = P.slice(); const ccw = signedArea(C) > 0;
+    for (let i = 0; i < C.length && out.length; i++) { const a = C[i], b = C[(i + 1) % C.length], inp = out; out = [];
+      const side = p => { const c = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]); return ccw ? c >= 0 : c <= 0; };
+      const cut = (p, q) => { const x1 = p[0], y1 = p[1], x2 = q[0], y2 = q[1], x3 = a[0], y3 = a[1], x4 = b[0], y4 = b[1], d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / d; return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)]; };
+      for (let j = 0; j < inp.length; j++) { const p = inp[j], q = inp[(j + 1) % inp.length], ip = side(p), iq = side(q);
+        if (iq) { if (!ip) out.push(cut(p, q)); out.push(q); } else if (ip) out.push(cut(p, q)); } }
+    return out; }
+  // overlap of a convex box B with any polygon M (buildings are often concave): M is fanned into triangles from its first vertex...
+  // that is only exact for convex M, so for a concave M the box is clipped by M's convex pieces from ear clipping instead.
+  function earTriangles(R) { const P = R.slice(); if (P.length > 3 && len(P[0], P[P.length - 1]) < 1e-12) P.pop(); const ccw = signedArea(P) > 0, T = [], idx = P.map((_, i) => i);
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let guard = 0; while (idx.length > 3 && guard++ < 5000) { let cut = false;
+      for (let i = 0; i < idx.length; i++) { const a = P[idx[(i - 1 + idx.length) % idx.length]], b = P[idx[i]], c = P[idx[(i + 1) % idx.length]], cr = cross(a, b, c);
+        if (ccw ? cr <= 0 : cr >= 0) continue;
+        if (idx.some(j => { const p = P[j]; if (p === a || p === b || p === c) return false; const d1 = cross(a, b, p), d2 = cross(b, c, p), d3 = cross(c, a, p); return ccw ? d1 > 0 && d2 > 0 && d3 > 0 : d1 < 0 && d2 < 0 && d3 < 0; })) continue;
+        T.push([a, b, c]); idx.splice(i, 1); cut = true; break; }
+      if (!cut) break; }
+    if (idx.length === 3) T.push(idx.map(i => P[i])); return T; }
+  const overlapArea = (box, poly) => earTriangles(poly).reduce((s, t) => { const c = clipConvex(box, t); return s + (c.length >= 3 ? area(c) : 0); }, 0);
+  // intersection over union, and the share of the box that is covered (the useful number for a small bay against a large building)
+  const iou = (a, b) => { const i = overlapArea(a, b), u = area(a) + area(b) - i; return u > 0 ? i / u : 0; };
+  const coveredShare = (box, poly) => overlapArea(box, poly) / (area(box) || 1);
+
+
+  // ---- 8. Site Radar scoring: every car park scored as a charging site by a weighted linear combination of six criteria ----
+  //  demand  : adaptive-bandwidth KDE of destinations weighted by how long drivers stay there (k = 6 nearest neighbours)
+  //  anchors : gravity pull Σ P / d² of big anchors (malls, hotels, stadiums, hospitals …), d floored at 60 m
+  //  gap     : distance to the nearest mapped charger      road : distance to a motorway, trunk or primary road
+  //  grid    : distance to the nearest mapped substation (left out when none is mapped)   size : spaces in the car park
+  //  All distances in metres on the local tangent plane around the view (accurate to < 0.5% over 1.5 km anywhere on Earth).
+  const RADAR_W = { demand: 0.25, anchors: 0.10, gap: 0.20, road: 0.15, grid: 0.10, size: 0.20 };
+  function radar(lots, raw, ctx) { if (!lots.length) return lots; const DEST_W = ctx.DEST_W, DEST_N = ctx.DEST_N;
+    const lat0 = lots.reduce((a, l) => a + l.lat, 0) / lots.length, lon0 = lots.reduce((a, l) => a + l.lon, 0) / lots.length, F = frame(lon0, lat0), L = (lo, la) => F.toLocal(lo, la);
+    const dest = raw.dest.map(p => ({ xy: L(p.c[0], p.c[1]), w: DEST_W[p.k] || DEST_W[p.cl] || 0, k: p.k })).filter(p => p.w > 0);
+    const hs = adaptiveBandwidths(dest, 6, 80, 600), anchors = dest.filter(p => p.w >= 2);
+    const segs = []; raw.roads.forEach(r => { const G = r.g.type === 'LineString' ? [r.g.coordinates] : r.g.type === 'MultiLineString' ? r.g.coordinates : []; G.forEach(l => { for (let i = 0; i < l.length - 1; i++) segs.push([L(l[i][0], l[i][1]), L(l[i + 1][0], l[i + 1][1]), r.w]); }); });
+    const subs = (raw.subs || []).map(q => L(q.lon, q.lat)), ch = raw.chargers.map(c => ({ xy: L(c.lon, c.lat), name: c.name }));
+    const clamp = v => Math.round(Math.max(0, Math.min(100, v)));
+    return lots.map(l => { const x = L(l.lon, l.lat);
+      const D = kdeAdaptive(x, dest, hs) * 2 * Math.PI * 250 * 250, g = gravity(x, anchors, 2, 60) * 3600;
+      let road = 1e9; segs.forEach(([a, b, w]) => { const m = snapToSegment(x, a, b).d / w; if (m < road) road = m; });
+      let near = 1e9, nearName = '', n1 = 0; ch.forEach(c => { const m = len(x, c.xy); if (m < near) { near = m; nearName = c.name; } if (m < 1000) n1++; });
+      let sub = 1e9; subs.forEach(q => { sub = Math.min(sub, len(x, q)); });
+      let nd = 0; const kinds = {}; dest.forEach(p => { if (len(x, p.xy) < 400) { nd++; kinds[p.k] = (kinds[p.k] || 0) + 1; } });
+      const spaces = l.area ? Math.round(l.area / 25) : 0;
+      const X = { demand: clamp(100 * Math.log1p(D) / Math.log1p(400)), anchors: clamp(100 * Math.log1p(g) / Math.log1p(12)), gap: near > 1e8 ? 100 : clamp(near / 20),
+        road: road > 1e8 ? 0 : clamp(100 * (1 - (road - 120) / 1400)), grid: subs.length ? clamp(100 * (1 - (sub - 300) / 2700)) : null, size: clamp(spaces / 3) };
+      const score = Math.round(wlc(X, RADAR_W));
+      const f = { dwell: X.demand, gap: X.gap, road: X.road, size: X.size, anchors: X.anchors, grid: X.grid };
+      const fx = [['Demand', X.demand], ['Anchors', X.anchors], ['Charging gap', X.gap], ['Main road', X.road]].concat(X.grid === null ? [] : [['Grid', X.grid]], [['Size', X.size]]);
+      const kind = f.road >= 70 && f.dwell < 55 ? 'dc' : 'ac', bays = Math.max(4, Math.min(40, Math.round((spaces || 120) * 0.03 / 2) * 2));
+      const top = Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, c]) => { const nm = DEST_N[n] || [n.replace(/_/g, ' '), n.replace(/_/g, ' ') + 's']; return `${c} ${c === 1 ? nm[0] : nm[1]}`; }).join(', ');
+      return Object.assign(l, { score, f, fx, kind, bays, spaces, nd, top, near: near > 1e8 ? null : Math.round(near), nearName, n1, sub: sub > 1e8 ? null : Math.round(sub) });
+    }).sort((a, b) => b.score - a.score); }
+
   // ---- 4. validation ----
   const SEV = ['Valid', 'Info', 'Warning', 'Review', 'Critical'];
   const issue = (sev, kind, objects, reason, measured, required) => ({ sev, level: SEV[sev], kind, objects, reason, measured, required });
@@ -91,8 +207,19 @@
     const F60 = parking.frontage(2.5, 5, 60), D60 = parking.depth(2.5, 5, 60);
     ok('60° bays: 2.887 m of kerb and 5.580 m deep each', Math.abs(F60 - 2.8868) < 1e-3 && Math.abs(D60 - 5.5801) < 1e-3, [F60, D60]);
     ok('Point-to-line snap', len(snapToSegment([3, 4], [0, 0], [10, 0]).q, [3, 0]) < 1e-12);
+    const mar = minAreaRect(rot ? rect([5, 5], 4, 10, 0.5) : []);
+    ok('Rotating calipers: a 4 × 10 m box turned 28.6° is found exactly', mar && Math.abs(mar.area - 40) < 1e-6 && Math.abs(mar.length - 10) < 1e-6 && Math.abs(mar.width - 4) < 1e-6, mar && [mar.area, mar.angle]);
+    const hp = []; for (let k = 0; k < 5; k++) for (let i = 0; i < 40; i++) { const t = i * 0.25, a = 30 * Math.PI / 180; hp.push([k * 3 * Math.cos(a + Math.PI / 2) + t * Math.cos(a), k * 3 * Math.sin(a + Math.PI / 2) + t * Math.sin(a)]); }
+    const ha = houghAngles(hp, { dR: 0.5, minVotes: 10 });
+    ok('Hough: five parallel lines at 30° give one direction at 30°', ha.length && angDiff(lineDir(ha[0].theta), 30) < 1, ha[0] && lineDir(ha[0].theta));
+    ok('Weighted score skips a missing criterion and renormalises', Math.abs(wlc({ a: 80, b: null, c: 40 }, { a: 0.5, b: 0.3, c: 0.2 }) - (0.5 * 80 + 0.2 * 40) / 0.7) < 1e-9);
+    const hs = adaptiveBandwidths([[0, 0], [10, 0], [0, 10], [10, 10], [2000, 0], [2600, 0]], 2, 1, 5000);
+    ok('Adaptive bandwidth: tight in a cluster, wide when isolated', hs[0] < 15 && hs[4] > 400, hs.map(h => Math.round(h)));
+    const box = [[0, 0], [4, 0], [4, 4], [0, 4]], L = [[2, 2], [10, 2], [10, 10], [6, 10], [6, 6], [2, 6]];
+    ok('Sutherland–Hodgman on an L-shaped building: overlap 4 m² of a 16 m² bay, IoU 4 / 60', Math.abs(overlapArea(box, L) - 4) < 1e-9 && Math.abs(iou(box, L) - 4 / 60) < 1e-9, [overlapArea(box, L), iou(box, L)]);
     return R; }
 
   root.TwinGeo = { frame, haversine, len, polyLength, area, signedArea, perimeter, centroid, rect, rot, pointInPoly, segIntersect, polysIntersect, contains, satOverlap,
-    snapToSegment, distPointPoly, distPolyPoly, distPolyLine, snapGrid, snapAngle, bearing, offsetSeg, parking, SEV, issue, selfTest };
+    snapToSegment, distPointPoly, distPolyPoly, distPolyLine, snapGrid, snapAngle, bearing, offsetSeg, parking, SEV, issue, selfTest,
+    convexHull, minAreaRect, houghAngles, lineDir, angDiff, kde, gravity, wlc, coverShare, adaptiveBandwidths, kdeAdaptive, clipConvex, earTriangles, overlapArea, iou, coveredShare, radar, RADAR_W };
 })(typeof window !== 'undefined' ? window : globalThis);
