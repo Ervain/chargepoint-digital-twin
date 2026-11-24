@@ -148,7 +148,7 @@
       const bldShare = ring => { const P = ring.slice(0, 4).map(q => GF.toLocal(q[0], q[1])); let a = 1e9, b = 1e9, c = -1e9, d = -1e9; P.forEach(([x, y]) => { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); });
         let s = 0; BLD.forEach(q => { if (q.bb[0] > c || q.bb[2] < a || q.bb[1] > d || q.bb[3] < b) return; try { s += G2.overlapArea(P, q.P); } catch (e) {} }); return s / (G2.area(P) || 1); };
       const FILT = window._lvFilt = { bld: 0, veg: 0, paved: 0, vegPx: VEG.reduce((a, b) => a + b, 0), paintPx: PAINT.reduce((a, b) => a + b, 0), WH };
-      if (nM < 2000) { hint('Lane Vision found no open parking area here. Move the pin onto the car park and try again.'); return; }
+      // little open asphalt is not the end: a fully shaded car park is found by its shade structures (step 7)
       // 2. parking blocks: the paved area split into separate pieces (2 m cells, joined side to side), each read on its own,
       //    so two car parks at different angles each get their own direction
       const cs = Math.max(3, Math.round(2 / mpp)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs), cellOn = new Uint8Array(gw * gh), lab = new Int32Array(gw * gh).fill(-1);
@@ -303,6 +303,62 @@
         for (let k = 0; k < cRuns.length - 1; k++) { const A1 = cRuns[k], B1 = cRuns[k + 1], gapM = (B1.v0 - A1.v1) * mpp;
           if (gapM >= 3.5 && gapM <= 10) { const u0 = Math.max(A1.u0, B1.u0), u1 = Math.min(A1.u1, B1.u1), v = (A1.v1 + B1.v0) / 2; if ((u1 - u0) * mpp > 6) out.aisles.push([toMap(u0, v), toMap(u1, v)]); } }
         if (cRuns.length) kept++; });
+      // 7. shade structures: long bright roofs 4 to 12 m wide (one or two rows of cars) whose surface carries a regular stripe every 2.2 to 3.4 m,
+      //    one stripe per bay. Found anywhere in the photo except on mapped tall buildings and roads, whatever the colour filter said about them;
+      //    where one is found, its bays replace anything the other readings placed there.
+      { const ob = document.createElement('canvas'); ob.width = w; ob.height = h; const og = ob.getContext('2d'); og.fillStyle = '#fff'; og.fillRect(0, 0, w, h); og.fillStyle = og.strokeStyle = '#000'; og.lineCap = 'round';
+        OBST.blds.forEach(r => { og.beginPath(); r.forEach((q, i) => { const [x, y] = L(q); i ? og.lineTo(x, y) : og.moveTo(x, y); }); og.closePath(); og.fill(); });
+        OBST.roads.forEach(rd => { og.lineWidth = rd.w / mpp; og.beginPath(); rd.line.forEach((q, i) => { const [x, y] = L(q); i ? og.lineTo(x, y) : og.moveTo(x, y); }); og.stroke(); });
+        const od = og.getImageData(0, 0, w, h).data, base = lum0 / 3, roof = i => { const r = img[i * 4], g = img[i * 4 + 1], b = img[i * 4 + 2]; return od[i * 4] > 128 && gray[i] > base + 28 && Math.min(r, g, b) > 105 && !(g > r + 8 && g > b + 2); };
+        const c1 = Math.max(2, Math.round(1.5 / mpp)), gw2 = Math.ceil(w / c1), gh2 = Math.ceil(h / c1), on = new Uint8Array(gw2 * gh2), lb = new Int32Array(gw2 * gh2).fill(-1);
+        for (let gy = 0; gy < gh2; gy++) for (let gx = 0; gx < gw2; gx++) { let n = 0, t = 0; for (let y = gy * c1; y < Math.min(h, gy * c1 + c1); y++) for (let x = gx * c1; x < Math.min(w, gx * c1 + c1); x++) { t++; if (roof(y * w + x)) n++; } on[gy * gw2 + gx] = n > t * 0.4 ? 1 : 0; }
+        const shades = dbg.shades = [], placed = [];
+        for (let s0 = 0; s0 < gw2 * gh2; s0++) { if (!on[s0] || lb[s0] >= 0) continue; const k = shades.length + 1, q = [s0], pts = []; lb[s0] = k;
+          while (q.length) { const c = q.pop(), cx = c % gw2, cy = (c / gw2) | 0; pts.push([cx * c1, cy * c1], [cx * c1 + c1, cy * c1], [cx * c1, cy * c1 + c1], [cx * c1 + c1, cy * c1 + c1]);
+            [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => { const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= gw2 || ny >= gh2) return; const o = ny * gw2 + nx; if (on[o] && lb[o] < 0) { lb[o] = k; q.push(o); } }); }
+          const nC = pts.length / 4, aM = nC * (c1 * mpp) ** 2; if (aM < 50) continue;
+          const mr = G2.minAreaRect(pts); if (!mr) continue; const Wm = mr.width * mpp, Lm = mr.length * mpp, fill = aM / (mr.area * mpp * mpp);
+          const d = { area: Math.round(aM), L: +Lm.toFixed(1), W: +Wm.toFixed(1), fill: +fill.toFixed(2) }; shades.push(d);
+          if (Lm < 10 || Wm < 4 || fill < 0.45) continue;
+          // the long and short sides of the rectangle
+          const P = mr.corners, e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1]], e2 = [P[3][0] - P[0][0], P[3][1] - P[0][1]], l1 = Math.hypot(...e1), l2 = Math.hypot(...e2);
+          const [U, Lp, V, Wp] = l1 >= l2 ? [[e1[0] / l1, e1[1] / l1], l1, [e2[0] / l2, e2[1] / l2], l2] : [[e2[0] / l2, e2[1] / l2], l2, [e1[0] / l1, e1[1] / l1], l1];
+          const at = (u, v) => [P[0][0] + u * U[0] + v * V[0], P[0][1] + u * U[1] + v * V[1]], toM = (u, v) => { const [x, y] = at(u, v); return toLL(x + ph.ox, y + ph.oy); };
+          const pix = (u, v) => { const [x, y] = at(u, v), xi = Math.round(x), yi = Math.round(y); return xi < 0 || yi < 0 || xi >= w || yi >= h ? -1 : yi * w + xi; };
+          // rows of shades merged into one shape (joined at their ends) are split into bright bands across the short side
+          let bands = [[0, Wp]];
+          if (Wm > 12.5) { const vb = 0.5 / mpp, nv = Math.floor(Wp / vb), fr = []; for (let j = 0; j < nv; j++) { let n = 0, t = 0; for (let uu = 0; uu < Lp; uu += 2) { const i = pix(uu, (j + 0.5) * vb); if (i < 0) continue; t++; if (roof(i)) n++; } fr.push(t ? n / t : 0); }
+            bands = []; let b0 = -1; for (let j = 0; j <= nv; j++) { const onB = j < nv && fr[j] > 0.45; if (onB && b0 < 0) b0 = j; if (!onB && b0 >= 0) { const wm = (j - b0) * 0.5; if (wm >= 4 && wm <= 12.5) bands.push([b0 * vb, j * vb]); b0 = -1; } } }
+          d.bands = bands.length;
+          bands.forEach(([vA, vB], bi) => { const Wb = (vB - vA) * mpp;
+            // brightness along the roof (middle 60% of the band): the stripes
+            const q4 = 0.25 / mpp, nb = Math.floor(Lp / q4), prof = new Float64Array(nb), cov = new Float64Array(nb);
+            for (let b = 0; b < nb; b++) { let sm = 0, n = 0, rf = 0; for (let uu = b * q4; uu < (b + 1) * q4; uu += 1) for (let vv = vA + (vB - vA) * 0.2; vv < vA + (vB - vA) * 0.8; vv += 1) { const i = pix(uu, vv); if (i < 0) continue; sm += gray[i]; n++; if (roof(i)) rf++; } prof[b] = n ? sm / n : 0; cov[b] = n ? rf / n : 0; }
+            // the stretch of the band that is really roof (ends trimmed where it fades into lane or sand)
+            let k0 = 0, k1 = nb; const cw = (i0) => { let sm = 0, n = 0; for (let j = i0; j < Math.min(nb, i0 + 12); j++) { sm += cov[j]; n++; } return n ? sm / n : 0; };
+            while (k0 < nb - 12 && cw(k0) < 0.4) k0++; while (k1 > k0 + 12 && cw(k1 - 12) < 0.4) k1--;
+            const P2 = Array.from(prof.slice(k0, k1)), m2 = P2.length; if (m2 * 0.25 < 10) return;
+            const Z = P2.map((x, i) => { let sm = 0, n = 0; for (let j = Math.max(0, i - 12); j <= Math.min(m2 - 1, i + 12); j++) { sm += P2[j]; n++; } return x - sm / n; }), E = Z.reduce((a, b) => a + b * b, 0) || 1;
+            // one stripe per bay (2.2 to 3.4 m), or one tent per two bays (4.5 to 7 m, each split in two)
+            const ac = Lg => { let sm = 0; for (let i = 0; i + Lg < m2; i++) sm += Z[i] * Z[i + Lg]; return sm / (E * (m2 - Lg) / m2); };
+            let pk = 0, lag = 10, per2 = 1; for (let Lg = 9; Lg <= 14; Lg++) { const v = ac(Lg); if (v > pk) { pk = v; lag = Lg; } }
+            let pk2 = 0, lag2 = 22; for (let Lg = 18; Lg <= 28; Lg++) { const v = ac(Lg); if (v > pk2) { pk2 = v; lag2 = Lg; } }
+            if (pk2 > pk * 1.3 && pk2 >= 0.2) { pk = pk2; lag = lag2; per2 = 2; }
+            (d.pk = d.pk || []).push(+pk.toFixed(2) + (per2 > 1 ? 't' : '')); if (pk < 0.15) return;
+            // bays start on the dark stripes (the gaps between roof panels sit over the bay lines)
+            let ph0 = 0, best = 1e18; for (let o = 0; o < lag; o++) { let sm = 0, n = 0; for (let i = o; i < m2; i += lag) { sm += P2[i]; n++; } if (n && sm / n < best) { best = sm / n; ph0 = o; } }
+            const bp = lag * q4 / per2, uS = (k0 + ph0 + 0.5) * q4, nBay = Math.floor(((k1 - k0 - ph0 - 0.5) * q4) / bp); if (nBay < 3) return;
+            const rowsV = Wb < 7.5 ? [[vA, vB]] : [[vA, (vA + vB) / 2], [(vA + vB) / 2, vB]], comp = 900000 + k * 10 + bi, rot = Math.round(((-Math.atan2(U[1], U[0]) * 180 / Math.PI) % 180 + 180) % 180);
+            // clear anything placed here by the other readings
+            const inside = c => { const [x, y] = toPx(c[0], c[1]), dx = x - ph.ox - P[0][0], dy = y - ph.oy - P[0][1], u = dx * U[0] + dy * U[1], v = dx * V[0] + dy * V[1]; return u > uS - 2 && u < uS + nBay * bp + 2 && v > vA - 2 && v < vB + 2; };
+            for (let r = runs.length - 1; r >= 0; r--) { const R = runs[r]; if (R.shade) continue; R.bays = R.bays.filter(bb => !inside(bb.c)); if (R.bays.length < 2) runs.splice(r, 1); }
+            let got = 0; rowsV.forEach(([v0, v1]) => { const bays = [];
+              for (let j = 0; j < nBay; j++) { const a0 = uS + j * bp, a1 = a0 + bp, ring = [toM(a0, v0), toM(a1, v0), toM(a1, v1), toM(a0, v1), toM(a0, v0)];
+                if (BLD.length && bldShare(ring) > 0.10) { FILT.bld++; continue; } bays.push({ ring, c: toM((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }); }
+              if (bays.length < 2) return; got += bays.length; const u0 = Math.min(...bays.map(b => b.u)) - bp / 2, u1 = Math.max(...bays.map(b => b.u)) + bp / 2;
+              runs.push({ v0, v1, u0, u1, ring: [toM(u0, v0), toM(u1, v0), toM(u1, v1), toM(u0, v1), toM(u0, v0)], bays, comp, rot, bayM: lag * 0.25 / per2, toMap: toM, shear: 0, bayAngle: 90, shade: true }); });
+            if (got) { d.bays = (d.bays || 0) + got; if (!placed.includes(d)) placed.push(d); } }); }
+        if (placed.length) { out.rows = runs.map(r => r.ring); out.bays = runs.flatMap(r => r.bays); spaces = out.bays.length; kept = Math.max(kept, 1) + placed.length; FILT.shade = placed.reduce((a, d) => a + d.bays, 0); } }
       if (collect) return out.rows.length ? { out, runs, spaces, kept, mpp, OBST, FILT } : null;
       if (!out.rows.length) { hint('Lane Vision found no rows with the regular rhythm of parking bays here (the photo may show an empty, covered or unmarked area). You can still drop the pin and build.'); return; }
       // pin on the row closest to the pin, canopies along that row
@@ -314,7 +370,7 @@
       LVS = { map, out, runs, nearest, pu: nb2.u, edited: false, bayPx: BAY / mpp, mpp, obst: OBST, lot: lot || null }; hookMap(map); tools.hidden = false; draw(map, out);
       const bw = nearest.bayM.toFixed(2);
       const ang = runs.filter(r => r.shear).length, dropped = FILT.bld + FILT.veg; dbg.filtered = FILT;
-      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays ${bw} m wide${nearest.shear ? `, angled at ${nearest.bayAngle}°` : ''}).${ang ? ` ${ang} row${ang > 1 ? 's' : ''} of angled parking.` : ''}${dropped ? ` ${dropped} bay${dropped > 1 ? 's' : ''} left out under trees or buildings.` : ''}`);
+      hint(`Lane Vision: ${out.rows.length} parking rows in ${kept} block${kept > 1 ? 's' : ''}, ${out.aisles.length} driving lanes, about ${spaces.toLocaleString('en-US')} spaces (bays ${bw} m wide${nearest.shear ? `, angled at ${nearest.bayAngle}°` : ''}).${ang ? ` ${ang} row${ang > 1 ? 's' : ''} of angled parking.` : ''}${FILT.shade ? ` ${FILT.shade} bays read from the stripes of shade structures.` : ''}${dropped ? ` ${dropped} bay${dropped > 1 ? 's' : ''} left out under trees or buildings.` : ''}`);
     }
 
     // ---- drawing, in the style of a site design: every bay a white rectangle, the charging bays green with a badge, lanes dashed ----
