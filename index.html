@@ -176,7 +176,7 @@ td:last-child{text-align:right;padding-left:8px;width:1%}
           <button class="ctl" id="t-spin" aria-pressed="false">Turntable</button>
           <button class="ctl" id="t-wide" aria-pressed="false" title="Wide-angle lens: the camera moves in close and takes in more of the scene.">Wide</button>
           <button class="ctl" id="t-full" aria-pressed="false" title="Fill the whole screen with the 3D view. Press again or Esc to leave.">Full</button>
-          <button class="ctl" id="t-shot" aria-pressed="false" title="Save the current 3D view as a PNG image.">Shot</button>
+          <button class="ctl" id="t-shot" aria-pressed="false" title="Save the current 3D view as an 8K image (7,680 px wide), framed exactly as on screen.">Shot 8K</button>
         </div>
       </div>
       <div class="hud hud--bot">
@@ -1866,6 +1866,11 @@ window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () =>
   const LX = -BW - 1.3; PL(15, CEIL, wallL, LX, CEIL / 2, WALL + 7.5, 0, Math.PI / 2);
   for (const y of [1.72, 2.02]) PL(15, 0.14, S(0x2c4f9c, 0.7), LX + 0.006, y, WALL + 7.5, 0, Math.PI / 2);
   box(0.24, 0.15, 15, S(0xd3ad1c, 0.7), LX + 0.12, 0.075, WALL + 7.5, E);
+  // one concrete column in the corner left of the charging wall, in the car park's own finish: cream concrete, two blue bands, a yellow and black guard at the foot
+  { const cx = -BW - 0.55, cz = WALL + 0.35;
+    box(0.5, CEIL, 0.6, S(0xe9e4d8, 0.85), cx, CEIL / 2, cz, E).castShadow = true;
+    for (const y of [1.72, 2.02]) box(0.512, 0.14, 0.612, S(0x2c4f9c, 0.7), cx, y, cz, E);
+    for (let i = 0; i < 6; i++) box(0.52, 0.12, 0.62, S(i % 2 ? 0x1b1b1b : 0xf2c200, 0.65), cx, 0.06 + i * 0.12, cz, E); }
   PL(80, 80, S(0x8f908f, 1), 0, CEIL, 30, Math.PI / 2);
   const galv = S(0xb4b8ba, 0.5, 0.6);
   box(1.5, 0.7, 30, galv, 5 * BW + 1.2, CEIL - 0.42, WALL + 15, E);                      // one duct run, kept clear of the bays
@@ -2406,14 +2411,21 @@ toggle('t-spin', v => { spin = v; controls.autoRotate = v; controls.autoRotateSp
 // screenshot: save the frame on screen as a PNG. Inside Claude the save goes through the viewer's download prompt; anywhere else it is a plain download
 document.getElementById('t-shot').addEventListener('click', async () => {
   const b = document.getElementById('t-shot'); if (b.dataset.busy) return; b.dataset.busy = '1'; let msg = 'Saved';
-  try { draw(); const blob = await new Promise(r => renderer.domElement.toBlob(r, 'image/png'));
+  b.textContent = '8K…'; await new Promise(r => setTimeout(r, 30));
+  // render the current view at 8K (7,680 px wide, same framing as the screen), then put the canvas back as it was
+  const old = new T.Vector2(); renderer.getSize(old); const pr = renderer.getPixelRatio(), asp = camera.aspect;
+  const gl = renderer.getContext(), lim = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0], renderer.capabilities.maxTextureSize);
+  const W8 = Math.min(7680, lim), H8 = Math.round(W8 / asp);
+  try { renderer.setPixelRatio(1); renderer.setSize(W8, H8, false); camera.aspect = asp; camera.updateProjectionMatrix(); draw();
+    const blob = await new Promise(r => renderer.domElement.toBlob(r, 'image/jpeg', 0.95));
+    renderer.setPixelRatio(pr); renderer.setSize(old.x, old.y, false); camera.aspect = asp; camera.updateProjectionMatrix(); draw();
     const d = new Date(), p2 = n => String(n).padStart(2, '0'), model = ((TEXT[railKey()] || [])[1] || 'view').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const name = `digital-twin-${model}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.png`;
+    const name = `digital-twin-${model}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}-${W8}px.jpg`;
     let done = false;
     if (window.claude && window.claude.use) { try { const dl = await window.claude.use('downloads'); if (dl) { await dl.save({ filename: name, data: blob }); done = true; } } catch (e) { if (e && (e.code === 'declined' || e.code === 'rate_limited')) { done = true; msg = e.code === 'declined' ? 'Cancelled' : 'Wait'; } } }
     if (!done) { const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); }
-  } catch (e) { msg = 'Failed'; }
-  b.textContent = msg; setTimeout(() => { b.textContent = 'Shot'; delete b.dataset.busy; }, 1400);
+  } catch (e) { msg = 'Failed'; renderer.setPixelRatio(pr); renderer.setSize(old.x, old.y, false); camera.aspect = asp; camera.updateProjectionMatrix(); draw(); }
+  b.textContent = msg; setTimeout(() => { b.textContent = 'Shot 8K'; delete b.dataset.busy; }, 1400);
 });
 // wide-angle lens and full-screen preview
 let wideCam = false;
