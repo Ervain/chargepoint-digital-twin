@@ -1877,7 +1877,7 @@ window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () =>
   for (const x of [-BW, BW]) box(1.2, 0.04, 0.1, glow, x, CEIL - 0.03, 2.6, E);
   // header: one brand-gradient light line across the wall, a backlit ChargePoint mark and wordmark, and a quiet tagline
   { const hc = document.createElement('canvas'); hc.width = 2048; hc.height = 400; const ht = new T.CanvasTexture(hc); ht.encoding = T.sRGBEncoding; ht.anisotropy = 8;
-    PL(2.6, 2.6 * 400 / 2048, new T.MeshBasicMaterial({ map: ht, transparent: true, toneMapped: false }), 0, 2.84, WALL + 0.012);   // raised into the clear band above the columns
+    PL(2.6, 2.6 * 400 / 2048, new T.MeshBasicMaterial({ map: ht, transparent: true, toneMapped: false }), 0, 2.70, WALL + 0.012);   // lowered a little (owner), still clear of the logo above the screen
     const paintHead = () => { if (!cpParts.mark || !cpParts.word) { setTimeout(paintHead, 150); return; }
       const p = hc.getContext('2d'); p.clearRect(0, 0, 2048, 400);
       const mh = 84, mw = mh * 320 / 286, wh = 45, ww = wh * 1100 / 86, gap = 30, x0 = 1024 - (mw + gap + ww) / 2, cy = 172;   // about 80 per cent of the capsule's width, with clear air above it
