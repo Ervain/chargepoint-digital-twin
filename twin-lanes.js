@@ -42,8 +42,47 @@
       if (sw) { sw.classList.remove('is-scan'); sw.hidden = true; } btn.disabled = false;
     }
 
-    async function detect(map, ctr, p) {
-      const G2 = window.TwinGeo;
+    // ---- every car park in view: each one read in turn, the bays merged into one plan (duplicates where car parks overlap removed) ----
+    const allBtn = document.createElement('button'); allBtn.type = 'button'; allBtn.className = 'tw-lv tw-lvall'; allBtn.textContent = 'All car parks';
+    allBtn.title = 'Read every car park in the map view with Lane Vision and draw all their bays together'; btn.after(allBtn);
+    let ALL = null;
+    async function runAll() {
+      const map = A.map(); if (!map) return;
+      if (ALL) { ALL.stop = true; allBtn.textContent = 'Stopping…'; return; }
+      if (map.getZoom() < 14.5) { hint('Zoom in to a district or a mall first (a few streets across), then press All car parks.'); return; }
+      ALL = { stop: false }; allBtn.textContent = 'Stop'; btn.disabled = true;
+      LVS = null; badges.forEach(mk => mk.remove()); badges = []; tools.hidden = true; ['lv-r', 'lv-b', 'lv-e', 'lv-a', 'lv-h', 'lv-k'].forEach(id => { const src = map.getSource(id); if (src) src.setData({ type: 'FeatureCollection', features: [] }); });
+      const sw = A.dlg.querySelector('.tw-sweep'); if (sw) { sw.hidden = false; sw.classList.add('is-scan'); }
+      try {
+        // the car parks: the list from Outline parking, found first if it is empty or belongs to another view
+        const b = map.getBounds(), inView = l => b.contains([l.lon, l.lat]);
+        if (!A.PK.list.length || !A.PK.list.some(inView)) { hint('Finding the car parks in this view…'); A.dlg.querySelector('.tw-pk').click();
+          for (let t = 0; t < 50 && !(A.PK.list.length && A.PK.list.some(inView)); t++) await new Promise(r => setTimeout(r, 500)); await new Promise(r => setTimeout(r, 1500)); }
+        const c = map.getCenter(), kx = 111320 * Math.cos(c.lat * Math.PI / 180), dC = l => Math.hypot((l.lon - c.lng) * kx, (l.lat - c.lat) * 110540);
+        const lots = A.PK.list.filter(inView).sort((x, y) => dC(x) - dC(y)).slice(0, 20);
+        if (!lots.length) { hint('No car parks are mapped in this view. Move the map, or use Lane Vision on a dropped pin.'); return; }
+        const out = { rows: [], bays: [], aisles: [], blocks: [] }, runs = [], OB = { blds: [], roads: [], aisles: [] }, seen = new Map(); let spaces = 0, read = 0, mpp = 0;
+        const key = ll => Math.round(ll[0] * kx / 1.5) + ':' + Math.round(ll[1] * 110540 / 1.5);   // 1.5 m cells: one bay per spot across overlapping car parks
+        for (let i = 0; i < lots.length && !ALL.stop; i++) { const l = lots[i]; hint(`Lane Vision is reading car park ${i + 1} of ${lots.length}${l.name ? ' (' + l.name + ')' : ''}… ${spaces ? spaces + ' spaces so far.' : ''}`);
+          let r = null; try { r = await detect(map, [l.lon, l.lat], { lot: l, name: l.label, lat: l.lat, lon: l.lon }, { collect: true }); } catch (e) { r = null; }
+          if (!r) continue; read++; mpp = mpp || r.mpp; ['blds', 'roads', 'aisles'].forEach(k => (r.OBST[k] || []).forEach(x => OB[k].push(x)));
+          r.runs.forEach(run => { run.comp = (i + 1) * 100000 + run.comp; run.bays = run.bays.filter(bb => { const k = key(bb.c); if (seen.has(k)) return false; seen.set(k, 1); return true; });
+            if (run.bays.length < 2) return; runs.push(run); out.rows.push(run.ring); run.bays.forEach(bb => out.bays.push(bb)); spaces += run.bays.length; });
+          r.out.aisles.forEach(a => out.aisles.push(a)); r.out.blocks.forEach(a => out.blocks.push(a));
+          if (runs.length) { LVS = { map, out, runs, nearest: runs[0], pu: runs[0].bays[0].u, edited: false, bayPx: BAY / mpp, mpp, obst: OB, lot: null }; draw(map, out); } }
+        if (!runs.length) { hint('Lane Vision found no parking rows in the car parks of this view. Try zooming in on one car park.'); return; }
+        // the pin goes to the bay closest to the centre of the view; canopies follow that row
+        let nearest = runs[0], nb = runs[0].bays[0], nd = 1e9; runs.forEach(r => r.bays.forEach(bb => { const d = Math.hypot((bb.c[0] - c.lng) * kx, (bb.c[1] - c.lat) * 110540); if (d < nd) { nd = d; nearest = r; nb = bb; } }));
+        A.setPin(nb.c[1], nb.c[0], null, { rot: nearest.rot, lot: { label: `${read} car parks`, kind: 'Surface', rows: out.rows, ring: null, lines: null, rot: nearest.rot,
+          capText: `about ${spaces.toLocaleString('en-US')} spaces in ${out.rows.length} rows across ${read} car parks, read from the satellite photo` } });
+        LVS = { map, out, runs, nearest, pu: nb.u, edited: false, bayPx: BAY / mpp, mpp, obst: OB, lot: null }; hookMap(map); tools.hidden = false; draw(map, out);
+        hint(`Lane Vision read ${read} of ${lots.length} car parks${ALL.stop ? ' (stopped)' : ''}: ${out.rows.length} parking rows, about ${spaces.toLocaleString('en-US')} spaces. The pin is on the bay nearest the centre of the view; drag across bays to place stalls, or use Cover whole car park.`);
+      } finally { if (sw) { sw.classList.remove('is-scan'); sw.hidden = true; } ALL = null; allBtn.textContent = 'All car parks'; btn.disabled = false; }
+    }
+    allBtn.addEventListener('click', runAll);
+
+    async function detect(map, ctr, p, opt) {
+      const G2 = window.TwinGeo, collect = !!(opt && opt.collect), hint = collect ? () => {} : A.hint;
       const mpp = 156543.034 * Math.cos(ctr[1] * Math.PI / 180) / 2 ** Z;            // metres per pixel
       // footprint: a picked car park's outline or lanes, else 75 m around the pin
       const lot = p && p.lot ? p.lot : null, R = 75 / mpp;
@@ -264,6 +303,7 @@
         for (let k = 0; k < cRuns.length - 1; k++) { const A1 = cRuns[k], B1 = cRuns[k + 1], gapM = (B1.v0 - A1.v1) * mpp;
           if (gapM >= 3.5 && gapM <= 10) { const u0 = Math.max(A1.u0, B1.u0), u1 = Math.min(A1.u1, B1.u1), v = (A1.v1 + B1.v0) / 2; if ((u1 - u0) * mpp > 6) out.aisles.push([toMap(u0, v), toMap(u1, v)]); } }
         if (cRuns.length) kept++; });
+      if (collect) return out.rows.length ? { out, runs, spaces, kept, mpp, OBST, FILT } : null;
       if (!out.rows.length) { hint('Lane Vision found no rows with the regular rhythm of parking bays here (the photo may show an empty, covered or unmarked area). You can still drop the pin and build.'); return; }
       // pin on the row closest to the pin, canopies along that row
       const kx = 111320 * Math.cos(ctr[1] * Math.PI / 180), dist = (q2) => Math.hypot((q2[0] - ctr[0]) * kx, (q2[1] - ctr[1]) * 110540);
