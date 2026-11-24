@@ -2891,6 +2891,13 @@ hint(`Best site here: ${ranked[0].label}, score ${ranked[0].score}. Press Build 
 function focusRank(i, quiet) { const l = RADAR.ranked && RADAR.ranked[i]; if (!l) return;
 $d('.tw-board').querySelectorAll('.tw-bd-card').forEach(c => c.classList.toggle('is-sel', +c.dataset.i === i));
 if (!quiet) pickParking(i); else showParking(PK.fc, i); }
+SITE.reRank = () => { if (!RADAR.ranked || !RADAR.raw) return; const ranked = scoreLots(RADAR.ranked, RADAR.raw); RADAR.ranked = ranked;
+PK.list = ranked.map((l, i) => Object.assign(l, { i })); showParking(lotFC(PK.list), -1);
+RADAR.markers = RADAR.markers.filter(m => { if (m.getElement().classList.contains('tw-rd-pin')) { m.remove(); return false; } return true; });
+ranked.forEach((l, i) => { const el = document.createElement('button'); el.type = 'button'; el.className = 'tw-rd-pin is-in' + (i === 0 ? ' is-top' : '');
+el.style.setProperty('--s', l.score); el.innerHTML = `<b>${l.score}</b>${i < 3 ? `<i>#${i + 1}</i>` : ''}`; el.setAttribute('aria-label', `${l.label}, site score ${l.score}`);
+el.addEventListener('click', ev => { ev.stopPropagation(); focusRank(i); }); RADAR.markers.push(new maplibregl.Marker({ element: el }).setLngLat([l.lon, l.lat]).addTo(map)); });
+board(ranked, RADAR.raw); };
 function buildRank(i) { const l = RADAR.ranked[i]; pickParking(i);
 $d('.tw-spots').value = l.bays; $d('.tw-kind').value = l.kind;
 pin.insight = { score: l.score, f: l.f, kind: l.kind, bays: l.bays, nd: l.nd, top: l.top, near: l.near, nearName: l.nearName, n1: l.n1, spaces: l.spaces, rank: i + 1, of: RADAR.ranked.length,
@@ -3560,6 +3567,7 @@ requestAnimationFrame(tick);
 <script src="twin-lanes.js"></script>
 <script src="twin-reveal.js"></script>
 <script src="twin-cable.js"></script>
+<script src="twin-radar-ui.js"></script>
 
 
 </body></html>

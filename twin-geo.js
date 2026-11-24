@@ -187,6 +187,12 @@
   //  grid    : distance to the nearest mapped substation (left out when none is mapped)   size : spaces in the car park
   //  All distances in metres on the local tangent plane around the view (accurate to < 0.5% over 1.5 km anywhere on Earth).
   const RADAR_A = ahp(RADAR_AHP), RADAR_W = {}; RADAR_C.forEach((c, i) => { RADAR_W[c] = RADAR_A.w[i]; });
+  // the team can set its own importance (1 to 5) for each criterion; the comparison matrix is then a_ij = s_i / s_j (consistent by construction, CR = 0)
+  const IMP_KEY = 'twin-radar-importance'; let IMP = null; try { const v = JSON.parse(localStorage.getItem(IMP_KEY)); if (v && RADAR_C.every(c => v[c] >= 1 && v[c] <= 5)) IMP = v; } catch (e) {}
+  function radarWeights() { if (!IMP) return { W: RADAR_W, CR: RADAR_A.CR, custom: false };
+    const A = RADAR_C.map(a => RADAR_C.map(b => IMP[a] / IMP[b])), r = ahp(A), W = {}; RADAR_C.forEach((c, i) => { W[c] = r.w[i]; }); return { W, CR: r.CR, custom: true }; }
+  function setImportance(v) { IMP = v; try { v ? localStorage.setItem(IMP_KEY, JSON.stringify(v)) : localStorage.removeItem(IMP_KEY); } catch (e) {} }
+  const DEFAULT_IMP = { demand: 3, gap: 2, size: 2, road: 1, anchors: 1, grid: 1 };
   function radar(lots, raw, ctx) { if (!lots.length) return lots; const DEST_W = ctx.DEST_W, DEST_N = ctx.DEST_N;
     const lat0 = lots.reduce((a, l) => a + l.lat, 0) / lots.length, lon0 = lots.reduce((a, l) => a + l.lon, 0) / lots.length, F = frame(lon0, lat0), L = (lo, la) => F.toLocal(lo, la);
     const dest = raw.dest.map(p => ({ xy: L(p.c[0], p.c[1]), w: DEST_W[p.k] || DEST_W[p.cl] || 0, k: p.k })).filter(p => p.w > 0);
@@ -212,10 +218,10 @@
     }).map((l, _, all) => l);
     // rank: TOPSIS over the criteria every site has data for (grid drops out when no substation is mapped), weights from AHP renormalised
     // a criterion known for at least half the sites is kept, its gaps filled with the median of the known values; otherwise it is left out
-    const cols = RADAR_C.filter(c => scored.filter(l => l.X[c] !== null).length >= Math.max(1, scored.length / 2)), w0 = cols.map(c => RADAR_W[c]), ws = w0.reduce((a, b) => a + b, 0), w = w0.map(x => x / ws);
+    const RW = radarWeights(), cols = RADAR_C.filter(c => scored.filter(l => l.X[c] !== null).length >= Math.max(1, scored.length / 2)), w0 = cols.map(c => RW.W[c]), ws = w0.reduce((a, b) => a + b, 0), w = w0.map(x => x / ws);
     const medOf = c => { const v = scored.map(l => l.X[c]).filter(x => x !== null).sort((a, b) => a - b); return v[v.length >> 1]; }, fill = {}; cols.forEach(c => { fill[c] = medOf(c); });
     const M2 = scored.map(l => cols.map(c => (l.X[c] === null ? fill[c] : l.X[c]) + 1)), C = topsis(M2, w), stab = scored.length > 1 ? rankStability(M2, w, 400) : scored.map(() => ({ first: 1, median: 1 }));
-    scored.forEach((l, i) => { l.wlc = l.score; l.score = scored.length > 1 ? Math.round(100 * C[i]) : l.wlc; l.stab = stab[i]; l.method = { cols, w: w.map(x => +x.toFixed(3)), CR: +RADAR_A.CR.toFixed(3) }; });
+    scored.forEach((l, i) => { l.wlc = l.score; l.score = scored.length > 1 ? Math.round(100 * C[i]) : l.wlc; l.stab = stab[i]; l.method = { cols, w: w.map(x => +x.toFixed(3)), CR: +RW.CR.toFixed(3), custom: RW.custom }; });
     return scored.sort((a, b) => b.score - a.score || b.wlc - a.wlc); }
 
   // ---- 4. validation ----
@@ -262,5 +268,5 @@
 
   root.TwinGeo = { frame, haversine, len, polyLength, area, signedArea, perimeter, centroid, rect, rot, pointInPoly, segIntersect, polysIntersect, contains, satOverlap,
     snapToSegment, distPointPoly, distPolyPoly, distPolyLine, snapGrid, snapAngle, bearing, offsetSeg, parking, SEV, issue, selfTest,
-    convexHull, minAreaRect, houghAngles, lineDir, angDiff, kde, gravity, wlc, coverShare, adaptiveBandwidths, kdeAdaptive, clipConvex, earTriangles, overlapArea, iou, coveredShare, radar, RADAR_W, ahp, topsis, rankStability, RADAR_AHP, RADAR_C };
+    convexHull, minAreaRect, houghAngles, lineDir, angDiff, kde, gravity, wlc, coverShare, adaptiveBandwidths, kdeAdaptive, clipConvex, earTriangles, overlapArea, iou, coveredShare, radar, RADAR_W, ahp, topsis, rankStability, RADAR_AHP, RADAR_C, radarWeights, setImportance, getImportance: () => IMP, DEFAULT_IMP };
 })(typeof window !== 'undefined' ? window : globalThis);
