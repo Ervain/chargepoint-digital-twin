@@ -1721,7 +1721,7 @@ function ensureSlim() {   // the no-battery canopies are only built the first ti
 /* ---------- project: Al Wahda Mall, Abu Dhabi. Two basement bays from the site photo, cleared of cars: one double-gun AC post
    (the slim post and charger from "AC post", no canopy), a lit sign on a graphite feature wall, and repainted bays ---------- */
 const AWM = { env: new T.Group(), lights: [], bg: new T.Color(0x16181b), on: () => current === 'awm' && ENV.on && !ENV.indoor };
-window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () => current };   // a handle for twin-awm.js (textures, extra cars)
+window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () => current, logo: () => cpParts };   // a handle for twin-awm.js (textures, extra cars)
 {
   const BW = 2.6, Z0 = 0.25, BL = 5.2, WALL = -0.75, CEIL = 3.3, POSTZ = -0.22, POSTH = 1.72;
   const g = new T.Group();
