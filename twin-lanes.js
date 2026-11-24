@@ -64,10 +64,14 @@
       else { mg.beginPath(); mg.arc(cx - ph.ox, cy - ph.oy, R, 0, 7); mg.fill(); }
       // take buildings and every road that is not a parking aisle out (from the same free map tiles)
       const RW = { motorway: 16, trunk: 14, primary: 13, secondary: 11, tertiary: 9, minor: 8, busway: 7, service: 5.5 };
-      const OBST = { blds: [], roads: [] };
+      const OBST = { blds: [], roads: [], aisles: [] };
       try { const raw = await A.probe(ctr, 17, m => ({ b: m.querySourceFeatures('openmaptiles', { sourceLayer: 'building' }),
-          r: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => { const P = f.properties || {}; return RW[P.class] && P.service !== 'parking_aisle' && !(lot && P.class === 'service'); }) }));
-        raw.b.forEach(f => { const g = f.geometry; (g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []).forEach(pl => OBST.blds.push(pl[0])); });
+          r: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(f => { const P = f.properties || {}; return RW[P.class] && P.service !== 'parking_aisle' && !(lot && P.class === 'service'); }),
+          a: m.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' }).filter(A.AISLE_OK) }));
+        raw.a.forEach(f => { const g = f.geometry; (g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []).forEach(l => OBST.aisles.push(l)); });
+        // structures 5 m tall or less are shade canopies, carports or kiosks: parking under them still counts, so they are kept apart from real buildings
+        const low = f => { const hh = +f.properties.render_height; return hh > 0 && hh <= 5; }; OBST.shades = [];
+        raw.b.forEach(f => { const g = f.geometry; (g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []).forEach(pl => (low(f) ? OBST.shades : OBST.blds).push(pl[0])); });
         raw.r.forEach(f => { const g = f.geometry; (g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []).forEach(l => OBST.roads.push({ line: l, w: RW[f.properties.class], cls: f.properties.class })); });
         mg.fillStyle = mg.strokeStyle = '#000';
         raw.b.forEach(f => { const g = f.geometry, polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []; polys.forEach(pl => { mg.beginPath(); pl[0].forEach((q, i) => { const [x, y] = L(q); i ? mg.lineTo(x, y) : mg.moveTo(x, y); }); mg.closePath(); mg.fill(); }); });
@@ -116,7 +120,65 @@
         comps.push({ k, n, box: [bx0 * cs, by0 * cs, Math.min(w, (bx1 + 1) * cs), Math.min(h, (by1 + 1) * cs)] }); }
       const inC = (k, x, y) => M[y * w + x] && lab[((y / cs) | 0) * gw + ((x / cs) | 0)] === k;
       const bin = 0.5 / mpp, out = { rows: [], bays: [], aisles: [], blocks: [] }, runs = []; let spaces = 0, kept = 0; const dbg = window._lvDbg = { nM, warm0, lum0, comps: comps.length, blocks: [] };
-      comps.filter(c => c.n * (cs * mpp) ** 2 >= 220).sort((p, q) => q.n - p.n).slice(0, 12).forEach(cp => {
+      // 2a. lane model: where driving lanes are mapped, bays sit on both sides of each lane. For every lane the cross-profile of edge strength
+      //     shows where the smooth driving surface ends; a 5 m strip from there is searched for parked cars and paint. A row is kept where the
+      //     strip is clearly busier than the lane itself, so full rows, empty painted rows and mixed rows are all found, and nothing lands on the lane.
+      const AIS = (lot && lot.lines ? lot.lines : OBST.aisles).map(l => l.map(L));
+      const dp = (P, tol) => { if (P.length < 3) return P; let k = 0, dm = 0; const [a, b] = [P[0], P[P.length - 1]], ab = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1e-9;
+        for (let i = 1; i < P.length - 1; i++) { const d = Math.abs((b[0] - a[0]) * (a[1] - P[i][1]) - (a[0] - P[i][0]) * (b[1] - a[1])) / ab; if (d > dm) { dm = d; k = i; } }
+        return dm > tol ? dp(P.slice(0, k + 1), tol).slice(0, -1).concat(dp(P.slice(k), tol)) : [a, b]; };
+      const usedC = [], q4 = 0.25 / mpp, dbgA = dbg.aisles = [];
+      // edge strength on every pixel of the footprint (the colour filter is not applied here: shade roofs and white cars are parking too)
+      const SH = new Uint8Array(WH); if (AIS.length && OBST.shades && OBST.shades.length) { const sc = document.createElement('canvas'); sc.width = w; sc.height = h; const sg = sc.getContext('2d'); sg.fillStyle = '#fff';
+        OBST.shades.forEach(r => { sg.beginPath(); r.forEach((q, i) => { const [x, y] = L(q); i ? sg.lineTo(x, y) : sg.moveTo(x, y); }); sg.closePath(); sg.fill(); });
+        const sd2 = sg.getImageData(0, 0, w, h).data; for (let i = 0; i < WH; i++) SH[i] = sd2[i * 4] > 128 ? 1 : 0; }
+      const inLot = i => mask[i * 4] > 128 || SH[i];
+      const GA = new Float32Array(WH); if (AIS.length) for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (!inLot(i)) continue;
+        const gx = gray[i - w + 1] + 2 * gray[i + 1] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - 1] - gray[i + w - 1], gy = gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1] - gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1]; GA[i] = Math.min(255, Math.hypot(gx, gy)); }
+      AIS.forEach((line, li) => { const S2 = dp(line, 1.5 / mpp); for (let k = 0; k < S2.length - 1; k++) { const p0 = S2[k], p1 = S2[k + 1], Lp = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]); if (Lp * mpp < 9) continue;
+        const dx = (p1[0] - p0[0]) / Lp, dy = (p1[1] - p0[1]) / Lp, at = (u, v) => [p0[0] + u * dx - v * dy, p0[1] + u * dy + v * dx];
+        const Gv = (u, v) => { const [x, y] = at(u, v), xi = Math.round(x), yi = Math.round(y); if (xi < 1 || yi < 1 || xi >= w - 1 || yi >= h - 1) return -1; const i = yi * w + xi; return inLot(i) ? GA[i] : -1; };
+        // cross profile, 0.5 m bins from −12 m to +12 m
+        const vb = 0.5 / mpp, nV = 49, CS = new Float64Array(nV), CN = new Float64Array(nV), CT = new Float64Array(nV);
+        for (let j = 0; j < nV; j++) { const v = (j - 24) * vb; for (let u = 0; u < Lp; u += 1) { const g = Gv(u, v); CT[j]++; if (g >= 0) { CS[j] += g; CN[j]++; } } }
+        const meanB = (j0, j1) => { let s = 0, n = 0; for (let j = Math.max(0, j0); j <= Math.min(nV - 1, j1); j++) { s += CS[j]; n += CN[j]; } return n ? s / n : 0; };
+        const cov = (j0, j1) => { let n = 0, t = 0; for (let j = Math.max(0, j0); j <= Math.min(nV - 1, j1); j++) { n += CN[j]; t += CT[j]; } return t ? n / t : 0; };
+        // the real lane: the smoothest 4 m band within 4 m of the mapped line (mapped lines are often a metre or two off the photo)
+        let cB = 24, cm = 1e9; for (let j = 16; j <= 32; j++) { const m0 = meanB(j - 4, j + 4); if (cov(j - 4, j + 4) > 0.6 && m0 < cm) { cm = m0; cB = j; } }
+        const Ga = meanB(cB - 4, cB + 4) || 1, rowRot = Math.round(((-Math.atan2(dy, dx) * 180 / Math.PI) % 180 + 180) % 180), toMapS = (u, v) => { const [x, y] = at(u, v); return toLL(x + ph.ox, y + ph.oy); };
+        const comp = 1000 + li * 100 + k, segRuns = [];
+        [-1, 1].forEach(sd => { let bo = 0, bs = -1e9;
+          // the row starts where texture jumps: the 5 m strip beyond the edge against the 2 m just inside it
+          for (let o = 1.5; o <= 6; o += 0.5) { const jo = Math.round(o / 0.5), sig = sd > 0 ? meanB(cB + jo, cB + jo + 10) - meanB(cB + jo - 4, cB + jo - 1) : meanB(cB - jo - 10, cB - jo) - meanB(cB - jo + 1, cB - jo + 4); if (sig > bs) { bs = sig; bo = o; } }
+          const jo = Math.round(bo / 0.5), j0 = sd > 0 ? cB + jo : cB - jo - 10, j1 = j0 + 10, Gs = meanB(j0, j1), cv = cov(j0, j1), vc = (cB - 24) * 0.5;
+          const db2 = { seg: k, side: sd, o: bo, c: vc, Ga: +Ga.toFixed(1), Gs: +Gs.toFixed(1), cov: +cv.toFixed(2) }; dbgA.push(db2);
+          if (cv < 0.45 || Gs < Ga * 1.2) return;
+          const v0 = (vc + (sd > 0 ? bo : -(bo + 5))) / mpp, v1 = v0 + 5 / mpp, nu = Math.ceil(Lp / q4) + 1, Su = new Float64Array(nu), Nu = new Float64Array(nu);
+          for (let u = 0; u < Lp; u += 1) for (let v = v0; v < v1; v += 1) { const g = Gv(u, v); if (g < 0) continue; const b = Math.floor(u / q4); Su[b] += g; Nu[b]++; }
+          const per = Array.from(Su, (x, b) => Nu[b] > 2 ? x / Nu[b] : 0), m5 = Math.round(5 / 0.25), thr = Ga * 1.15, segs = []; let r0 = -1, gap = 0;
+          for (let b = 0; b <= nu; b++) { let sm = 0, n = 0; for (let j = Math.max(0, b - m5 / 2); j < Math.min(nu, b + m5 / 2); j++) if (Nu[j] > 2) { sm += per[j]; n++; }
+            const on = b < nu && n >= m5 / 3 && sm / n > thr; if (on) { if (r0 < 0) r0 = b; gap = 0; } else if (r0 >= 0) { gap++; if (gap * 0.25 > 4 || b === nu) { const e = b - gap + 1; if ((e - r0) * 0.25 >= 5) segs.push([r0, e]); r0 = -1; gap = 0; } } }
+          db2.stretches = segs.length;
+          segs.forEach(([k0, k1]) => { const P = per.slice(k0, k1), Z = P.map((x, i) => { let s = 0, n = 0; for (let j = Math.max(0, i - 10); j <= Math.min(P.length - 1, i + 10); j++) { s += P[j]; n++; } return x - s / n; }), E = Z.reduce((x, y) => x + y * y, 0) || 1;
+            let pk = 0, lag = 10; for (let Lg = 9; Lg <= 12; Lg++) { let sm = 0; for (let i = 0; i + Lg < Z.length; i++) sm += Z[i] * Z[i + Lg]; sm /= E * (Z.length - Lg) / Z.length; if (sm > pk) { pk = sm; lag = Lg; } }
+            if (pk < 0.1) lag = 10;
+            let ph0 = 0, phs = -1; for (let o = 0; o < lag; o++) { let sm = 0; for (let i = o; i < P.length; i += lag) sm += P[i]; if (sm > phs) { phs = sm; ph0 = o; } }
+            const bp = lag * q4, uS = (k0 + ph0) * q4, n = Math.floor(((k1 - k0 - ph0) * q4) / bp), bays = [];
+            for (let j = 0; j < n; j++) { const a0 = uS + j * bp, a1 = a0 + bp, cu = (a0 + a1) / 2, cvv = (v0 + v1) / 2, [cx2, cy2] = at(cu, cvv);
+              if (usedC.some(([x, y]) => Math.hypot(x - cx2, y - cy2) < bp * 0.6)) continue;
+              let t = 0, gd = 0, vg = 0; for (let su = 0.15; su < 1; su += 0.23) for (let sv = 0.12; sv < 1; sv += 0.19) { t++; const [x, y] = at(a0 + su * (a1 - a0), v0 + sv * (v1 - v0)), xi = Math.round(x), yi = Math.round(y);
+                if (xi < 0 || yi < 0 || xi >= w || yi >= h) continue; const i = yi * w + xi; if (inLot(i)) gd++; if (VEG[i] && GA[i] > 28) vg++; }
+              if (gd / t < 0.6) { FILT.paved++; continue; } if (vg / t > 0.15) { FILT.veg++; continue; }
+              const ring = [toMapS(a0, v0), toMapS(a1, v0), toMapS(a1, v1), toMapS(a0, v1), toMapS(a0, v0)]; if (BLD.length && bldShare(ring) > 0.10) { FILT.bld++; continue; }
+              usedC.push([cx2, cy2]); const bb = { ring, c: toMapS(cu, cvv), u: cu, v: cvv }; bays.push(bb); }
+            if (bays.length < 2) return;
+            bays.forEach(b => out.bays.push(b)); const u0 = Math.min(...bays.map(b => b.u)) - bp / 2, u1 = Math.max(...bays.map(b => b.u)) + bp / 2;
+            const ring = [toMapS(u0, v0), toMapS(u1, v0), toMapS(u1, v1), toMapS(u0, v1), toMapS(u0, v0)]; out.rows.push(ring); spaces += bays.length;
+            const run = { v0, v1, u0, u1, ring, bays, comp, rot: rowRot, bayM: lag * 0.25, toMap: toMapS, shear: 0, bayAngle: 90, lane: true }; runs.push(run); segRuns.push(run); }); });
+        if (segRuns.length) { kept++; const u0 = Math.min(...segRuns.map(r => r.u0)), u1 = Math.max(...segRuns.map(r => r.u1)); out.aisles.push([toMapS(u0, (cB - 24) * 0.5 / mpp), toMapS(u1, (cB - 24) * 0.5 / mpp)]); } } });
+      const useLanes = out.bays.length >= 4; dbg.laneBays = out.bays.length;
+      if (!useLanes) { out.rows.length = 0; out.bays.length = 0; out.aisles.length = 0; runs.length = 0; spaces = 0; kept = 0; usedC.length = 0; }
+      if (!useLanes) comps.filter(c => c.n * (cs * mpp) ** 2 >= 220).sort((p, q) => q.n - p.n).slice(0, 12).forEach(cp => {
         const [X0, Y0, X1, Y1] = cp.box, D = Math.hypot(w, h);
         // 3. orientation by a Radon-style projection: the angle whose cross-profile of edge strength bands most strongly
         const profileAt = (a, step) => { const ca = Math.cos(a), sa = Math.sin(a), nb = Math.ceil(2 * D / bin) + 2, S2 = new Float64Array(nb), N = new Float64Array(nb);
