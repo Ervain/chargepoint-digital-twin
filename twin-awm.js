@@ -36,11 +36,11 @@
       c.strokeStyle = 'rgba(70,70,70,.16)'; c.lineWidth = 2; for (let y = 0; y < h; y += h / 6) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); } }, [20, 20]), bumpScale: 0.012 });
     if (ceil) { ceil.material = conc.clone(); ceil.material.bumpMap = conc.bumpMap; }
     for (let k = 0; k < 4; k++) { const z = WALL + 0.25 + k * 5.2; const b = new T.Mesh(new T.BoxGeometry(60, 0.5, 0.4), conc); b.position.set(0, CEIL - 0.25, z); b.receiveShadow = true; G.add(b); }
-    const tubeM = new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }); tubeM.color.setScalar(1.6);
+    const tubeM = new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }); tubeM.color.setScalar(1.6); const FIT = [];
     const housing = new T.MeshStandardMaterial({ color: 0xd9d9d6, roughness: 0.5, metalness: 0.3 });
     for (const z of [2.0, 7.2, 12.4]) for (const x of [-7.8, -3.9, 0, 3.9, 7.8]) { if (z === 2.0 && Math.abs(x) < 3) continue;
       const hs = new T.Mesh(new T.BoxGeometry(1.5, 0.06, 0.12), housing); hs.position.set(x, CEIL - 0.06, z); G.add(hs);
-      const tb = new T.Mesh(new T.BoxGeometry(1.42, 0.02, 0.06), tubeM); tb.position.set(x, CEIL - 0.1, z); G.add(tb); }
+      const tb = new T.Mesh(new T.BoxGeometry(1.42, 0.02, 0.06), tubeM); tb.position.set(x, CEIL - 0.1, z); G.add(tb); FIT.push([x, z]); }
 
     // ---- 4. structure: concrete columns either side of the charging bays, with the car park's blue banding and a corner guard ----
     const colM = new T.MeshStandardMaterial({ color: 0xe9e4d8, roughness: 0.85, bumpMap: conc.bumpMap, bumpScale: 0.008 });
@@ -97,13 +97,32 @@
       cars.push(c); A.draw(); A.say(`Car parked in ${slots[k][1] === 'bay' ? 'the next bay' : slots[k][1]}. ${cars.length} of ${slots.length}.`); }
     function clearCars() { cars.splice(0).forEach(c => E.remove(c)); A.draw(); A.say('Cars cleared.'); }
 
+    // ---- 7. night: the general light goes down and the basement is lit by its own fittings: a soft pool under each LED fitting,
+    //      warm lamps over the bays, and the screen, the charger lights and the brand lines carry the wall ----
+    const NL = FIT.filter(([x, z]) => Math.abs(x) < 8.5 && z < 10).map(([x, z]) => { const L = new T.PointLight(0xf4f8ff, 0, 7.5, 2); L.position.set(x, CEIL - 0.25, z); G.add(L); return L; });
+    const NIGHT = { on: false, keep: null };
+    let hemi = null; A.scene.traverse(o => { if (!hemi && o.isHemisphereLight) hemi = o; });
+    const applyNight = () => { if (!NIGHT.on || !H.isOn()) return; const sun = A.sun;
+      if (sun && sun.intensity !== 0.04) sun.intensity = 0.04; if (hemi && hemi.intensity !== 0.06) hemi.intensity = 0.06;
+      AWM.lights.forEach(L => { L.intensity = L.userData.on * 3; }); NL.forEach(L => { L.intensity = 2.4; });
+      if (A.scene.environment) { NIGHT.env = A.scene.environment; A.scene.environment = null; }   // no ambient reflection light at night
+      A.renderer.toneMappingExposure = 1.0; if (A.scene.background && A.scene.background.isColor) A.scene.background.setHex(0x060708); if (A.scene.fog) A.scene.fog.color.setHex(0x060708); tubeM.color.setScalar(2.4); };
+    function setNight(on) { NIGHT.on = on; const sun = A.sun;
+      if (on) { NIGHT.keep = { sun: sun ? sun.intensity : null, hemi: hemi ? hemi.intensity : null, exp: A.renderer.toneMappingExposure, bg: A.scene.background && A.scene.background.isColor ? A.scene.background.getHex() : null, fog: A.scene.fog ? A.scene.fog.color.getHex() : null }; applyNight(); }
+      else { const k = NIGHT.keep || {}; if (NIGHT.env && !A.scene.environment) A.scene.environment = NIGHT.env; if (sun && k.sun !== null) sun.intensity = k.sun; if (hemi && k.hemi !== null) hemi.intensity = k.hemi; if (k.exp) A.renderer.toneMappingExposure = k.exp;
+        if (k.bg !== null && A.scene.background && A.scene.background.isColor) A.scene.background.setHex(k.bg); if (k.fog !== null && A.scene.fog) A.scene.fog.color.setHex(k.fog);
+        AWM.lights.forEach(L => { L.intensity = L.userData.on; }); NL.forEach(L => { L.intensity = 0; }); tubeM.color.setScalar(1.6); }
+      bNight.textContent = on ? '☀️ Day' : '🌙 Night'; A.draw(); A.say(on ? 'Night: the basement is lit only by its fittings, the screen and the charger lights.' : 'Day lighting.'); }
+    // other parts of the app reset the lights when the view changes; night is kept while it is on
+    setInterval(() => { if (NIGHT.on && H.isOn()) { applyNight(); A.draw(); } else if (NIGHT.on && !H.isOn()) { NL.forEach(L => { L.intensity = 0; }); if (NIGHT.env && !A.scene.environment) A.scene.environment = NIGHT.env; } }, 700);
+
     // ---- the two buttons, shown on the Al Wahda Mall project only ----
     const st = document.createElement('style'); st.textContent = `.tw-awm-cars{position:fixed;left:20px;bottom:118px;z-index:20;display:flex;gap:8px}.tw-awm-cars[hidden]{display:none}
 .tw-awm-cars button{appearance:none;border:0;border-radius:999px;padding:9px 14px;font:600 13px var(--display,Helvetica);cursor:pointer;background:rgba(255,255,255,.92);color:#1d1d1f;box-shadow:0 4px 16px rgba(0,0,0,.18)}
-.tw-awm-cars button:first-child{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}`; document.head.appendChild(st);
+.tw-awm-cars button:first-child{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-awm-cars .tw-awm-night{background:#1d1d1f;color:#fff}`; document.head.appendChild(st);
     const bar = document.createElement('div'); bar.className = 'tw-awm-cars'; bar.hidden = true;
-    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button>';
-    document.body.appendChild(bar); const [bAdd, bClr] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars);
+    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button><button type="button" class="tw-awm-night" title="See the basement at night, lit only by its own fittings">🌙 Night</button>';
+    document.body.appendChild(bar); const [bAdd, bClr, bNight] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars); bNight.addEventListener('click', () => setNight(!NIGHT.on));
     setInterval(() => { const on = H.isOn() && !S.on; if (bar.hidden === on) bar.hidden = !on; }, 500);
     A.draw(); };
   if (window.__twin && window.__twin.api) start(); else document.addEventListener('twin-ready', start, { once: true });
