@@ -643,7 +643,45 @@
       el.hidden = false; el.querySelector('button').onclick = () => { el.hidden = true; }; }
     // Turn: each canopy turns about its own centre, the layout stays on the rows
     A.bar.querySelector('.tw-rot').addEventListener('input', () => { if (!COVER || !COVER.on || !COVER.plan || !S.product || !S.product.userData.cover) return; const P = S.product, d = A.T.MathUtils.degToRad(S.rot - COVER.rot0);
-      P.rotation.y = 0; COVER.plan.forEach(R => { const th = R.th + d, ox = R.ox * Math.cos(th) + R.oz * Math.sin(th), oz = -R.ox * Math.sin(th) + R.oz * Math.cos(th); R.obj.rotation.y = th; R.obj.position.set(R.x - ox, 0, R.z - oz); }); unhide(COVER.plan); A.draw(); });
+      P.rotation.y = 0; COVER.plan.forEach(R => placeUnit(R, d)); unhide(COVER.plan); if (PICK.sel) PICK.box.update(); A.draw(); });
+    // one canopy placed at the layout's turn d plus its own extra turn (R.dth), turning about its own centre
+    function placeUnit(R, d) { const th = R.th + d + (R.dth || 0), ox = R.ox * Math.cos(th) + R.oz * Math.sin(th), oz = -R.ox * Math.sin(th) + R.oz * Math.cos(th); R.obj.rotation.y = th; R.obj.position.set(R.x - ox, 0, R.z - oz); }
+    const layoutTurn = () => A.T.MathUtils.degToRad(S.rot - (COVER.rot0 || 0));
+    // ---- pick one canopy of a covered car park and turn it on its own: click it in 3D, then use the small panel ----
+    const PICK = { sel: null, box: null, panel: null };
+    { const cv = A.renderer.domElement; let down = null;
+      const st = document.createElement('style'); st.textContent = `.tw-pick{position:absolute;left:50%;bottom:86px;transform:translateX(-50%);z-index:30;background:rgba(18,20,24,.94);color:#fff;border-radius:14px;padding:10px 12px;
+font:500 12px var(--display,Helvetica);display:flex;align-items:center;gap:8px;flex-wrap:wrap;box-shadow:0 8px 30px rgba(0,0,0,.35);max-width:min(560px,92vw)}
+.tw-pick b{font-weight:700;margin-right:2px}.tw-pick button{appearance:none;border:0;border-radius:8px;background:rgba(255,255,255,.12);color:#fff;font:600 12px var(--display,Helvetica);padding:6px 9px;cursor:pointer}
+.tw-pick button:hover{background:rgba(255,255,255,.22)}.tw-pick button.del{background:rgba(255,80,80,.22)}.tw-pick input{width:120px}.tw-pick output{min-width:34px;text-align:right}
+.tw-pick .warn{flex-basis:100%;color:#ffcf66;font-size:11px}.tw-pick .ok{flex-basis:100%;color:#9fd98a;font-size:11px}`; document.head.appendChild(st);
+      const clear = () => { if (PICK.box) { A.scene.remove(PICK.box); PICK.box = null; } if (PICK.panel) { PICK.panel.remove(); PICK.panel = null; } PICK.sel = null; A.draw(); };
+      // does the turned canopy now overlap a neighbour? the same rectangle test as the engineering check
+      const clashes = R => { const G = window.TwinGeo; if (!G || !R.c || !COVER.W) return []; const d = layoutTurn(), poly = G.rect(R.c, COVER.W, COVER.Dp, R.thL + d + (R.dth || 0));
+        return COVER.plan.filter(Q => Q !== R && Q.c && Math.hypot(Q.c[0] - R.c[0], Q.c[1] - R.c[1]) < COVER.W + COVER.Dp).filter(Q => G.satOverlap(poly, G.rect(Q.c, COVER.W, COVER.Dp, Q.thL + d + (Q.dth || 0))) > 0.05).map(Q => Q.name); };
+      const refresh = () => { const R = PICK.sel; if (!R || !PICK.panel) return; const deg = Math.round((R.dth || 0) * 180 / Math.PI); PICK.panel.querySelector('input').value = deg; PICK.panel.querySelector('output').textContent = (deg > 0 ? '+' : '') + deg + '°';
+        const c = clashes(R), m = PICK.panel.querySelector('.msg'); m.className = 'msg ' + (c.length ? 'warn' : 'ok'); m.textContent = c.length ? `Now overlaps ${c.join(', ')}. Turn it a little more, or remove one.` : 'Clear of its neighbours.'; };
+      const turn = deg => { const R = PICK.sel; if (!R) return; R.dth = deg * Math.PI / 180; placeUnit(R, layoutTurn()); PICK.box.update(); unhide(COVER.plan); A.draw(); refresh(); };
+      function select(R) { clear(); PICK.sel = R; PICK.box = new A.T.BoxHelper(R.obj, 0x3BA9E0); A.scene.add(PICK.box);
+        const pn = PICK.panel = document.createElement('div'); pn.className = 'tw-pick';
+        pn.innerHTML = `<b>${R.name}</b><span>Turn this canopy</span><button type="button" data-t="-15">↺ 15°</button><input type="range" min="-180" max="180" step="1" aria-label="Turn this canopy"><output></output>`
+          + '<button type="button" data-t="15">↻ 15°</button><button type="button" data-t="90">90°</button><button type="button" data-t="0">Reset</button><button type="button" class="del">Remove</button><button type="button" data-x="1" aria-label="Close">✕</button><span class="msg ok"></span>';
+        A.stage.appendChild(pn);
+        pn.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; e.stopPropagation();
+          if (b.dataset.x) return clear();
+          if (b.classList.contains('del')) { const R2 = PICK.sel; R2.obj.parent.remove(R2.obj); COVER.plan.splice(COVER.plan.indexOf(R2), 1); S.list = COVER.plan.map(() => S.list[0]); A.say(`${R2.name} removed. ${COVER.plan.length} canopies left.`); clear(); return; }
+          const t = +b.dataset.t, cur = Math.round((PICK.sel.dth || 0) * 180 / Math.PI); turn(t === 0 ? 0 : t === 90 ? ((cur + 90 + 180) % 360) - 180 : Math.max(-180, Math.min(180, cur + t))); });
+        pn.querySelector('input').addEventListener('input', e => turn(+e.target.value));
+        refresh(); A.draw(); A.say(`${R.name} selected. Turn it with the buttons or the slider; click another canopy to pick it, or empty ground to finish.`); }
+      cv.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+      cv.addEventListener('pointerup', e => { if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return; down = null;
+        if (!COVER || !COVER.plan || !S.product || !S.product.userData.cover || (S.cable && S.cable.picking)) { if (PICK.sel) clear(); return; }
+        const r = cv.getBoundingClientRect(), ray = new A.T.Raycaster(); ray.setFromCamera(new A.T.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), A.camera);
+        const hit = ray.intersectObjects(COVER.plan.map(R => R.obj), true)[0];
+        if (!hit) { if (PICK.sel) clear(); return; }
+        let o = hit.object; const R = COVER.plan.find(Q => { let x = o; while (x) { if (x === Q.obj) return true; x = x.parent; } return false; }); if (R) select(R); });
+      // a new layout clears the choice
+      setInterval(() => { if (PICK.sel && (!COVER || !COVER.plan || !COVER.plan.includes(PICK.sel) || !S.on)) clear(); }, 700); }
     // other controls rebuild the canopies (another model, AC or DC): the cover is laid out again with the new unit
     setInterval(() => { if (COVER && COVER.on && S.on && S.product && !S.product.userData.cover && !COVER.starting) applyCover(); if (COVER && !S.on) { COVER = null; const v = A.stage.querySelector('.tw-val'); if (v) v.hidden = true; } }, 600);
 
