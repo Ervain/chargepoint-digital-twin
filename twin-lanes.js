@@ -88,58 +88,99 @@
     { const st = document.createElement('style'); st.textContent = `.tw-rowpop{position:absolute;right:16px;top:64px;z-index:40;width:270px;background:#fff;border-radius:16px;box-shadow:0 10px 34px rgba(0,0,0,.22);padding:14px;font:500 13px var(--display,Helvetica);color:#1d1d1f}
 .tw-rowpop h4{margin:0 0 8px;font:700 14px var(--display,Helvetica)}.tw-rowpop label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0}.tw-rowpop input,.tw-rowpop select{width:96px;font:500 13px var(--display,Helvetica);padding:4px 6px;border:1px solid #d2d2d7;border-radius:8px}
 .tw-rowpop .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.tw-rowpop button{appearance:none;border:0;border-radius:999px;padding:7px 12px;font:600 12px var(--display,Helvetica);cursor:pointer;background:#f2f2f4;color:#1d1d1f}
-.tw-rowpop button.go{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-rowpop p{margin:6px 0 0;color:#6e6e73;font-size:12px;line-height:1.35}`; document.head.appendChild(st); }
-    const ROWS = { mode: 0, p0: null, p1: null, pop: null, undo: [], side: 1 };
+.tw-rowpop button.go{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-rowpop p{margin:6px 0 0;color:#6e6e73;font-size:12px;line-height:1.35}.tw-rowpop .grp{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0}.tw-rowpop .grp span{min-width:62px;color:#6e6e73}.tw-rowpop .grp button{padding:5px 8px}`; document.head.appendChild(st); }
+    const ROWS = { mode: 0, p0: null, p1: null, ll0: null, pop: null, blocks: [], cur: null };
     const prevSrc = { type: 'FeatureCollection', features: [] };
     const showPrev = (map, rings) => { prevSrc.features = rings.map(r => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [r] } }));
       if (!map.getSource('lv-rowprev')) { map.addSource('lv-rowprev', { type: 'geojson', data: prevSrc }); map.addLayer({ id: 'lv-rowprev', type: 'line', source: 'lv-rowprev', paint: { 'line-color': '#3BA9E0', 'line-width': 2, 'line-dasharray': [2, 1.5] } }); }
       else map.getSource('lv-rowprev').setData(prevSrc); };
     // the layout across the rows, in metres from the drawn line: back-to-back pairs with a lane after each pair, or a lane after every row
-    function plan(o) { const W = o.w, D = o.d, Ln = o.lane, n = o.n, rows = []; let v = 0;
-      for (let i = 0; i < n; i++) { rows.push([v, v + D]); v += D; const pairEnd = o.layout === 'pairs' ? i % 2 === 1 : true; if (pairEnd && i < n - 1) v += Ln; }
-      return { rows, W }; }
-    function build(o, commit) { const map = A.map(), lat = ROWS.ll0[1], mpp = 156543.034 * Math.cos(lat * Math.PI / 180) / 2 ** Z, mP = 1 / mpp;
-      const [x0, y0] = ROWS.p0, [x1, y1] = ROWS.p1, Lp = Math.hypot(x1 - x0, y1 - y0); if (Lp * mpp < o.w) return [];
+    function plan(o) { const rows = []; let v = 0;
+      for (let i = 0; i < o.n; i++) { rows.push([v, v + o.d]); v += o.d; const pairEnd = o.layout === 'pairs' ? i % 2 === 1 : true; if (pairEnd && i < o.n - 1) v += o.lane; }
+      return rows; }
+    const mppAt = lat => 156543.034 * Math.cos(lat * Math.PI / 180) / 2 ** Z;
+    // one block of rows from its line (p0 to p1, global pixels at zoom 19) and its options
+    function make(b) { const mpp = mppAt(b.lat), mP = 1 / mpp, o = b.o;
+      const [x0, y0] = b.p0, [x1, y1] = b.p1, Lp = Math.hypot(x1 - x0, y1 - y0); if (Lp * mpp < o.w) return { runs: [], lanes: [] };
       const U = [(x1 - x0) / Lp, (y1 - y0) / Lp], N = [-U[1] * o.side, U[0] * o.side], toM = (u, v) => toLL(x0 + u * U[0] + v * N[0], y0 + u * U[1] + v * N[1]);
-      const { rows } = plan(o), nB = Math.floor(Lp * mpp / o.w), s0 = (Lp - nB * o.w * mP) / 2, bp = o.w * mP, rot = Math.round(((-Math.atan2(U[1], U[0]) * 180 / Math.PI) % 180 + 180) % 180), comp = 700000 + ROWS.undo.length * 10;
-      const runs = rows.map(([a, b]) => { const v0 = a * mP, v1 = b * mP, bays = [];
+      const rows = plan(o), nB = Math.floor(Lp * mpp / o.w), bp = o.w * mP, s0 = (Lp - nB * bp) / 2, rot = Math.round(((-Math.atan2(U[1], U[0]) * 180 / Math.PI) % 180 + 180) % 180);
+      const runs = rows.map(([a, c]) => { const v0 = a * mP, v1 = c * mP, bays = [];
         for (let j = 0; j < nB; j++) { const a0 = s0 + j * bp, a1 = a0 + bp; bays.push({ ring: [toM(a0, v0), toM(a1, v0), toM(a1, v1), toM(a0, v1), toM(a0, v0)], c: toM((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }); }
-        const u0 = s0, u1 = s0 + nB * bp; return { v0, v1, u0, u1, ring: [toM(u0, v0), toM(u1, v0), toM(u1, v1), toM(u0, v1), toM(u0, v0)], bays, comp, rot, bayM: o.w, toMap: toM, shear: 0, bayAngle: 90, manual: true }; });
-      if (!commit) return runs;
-      // lanes: the centre line of each gap between rows
+        return { v0, v1, u0: s0, u1: s0 + nB * bp, ring: [toM(s0, v0), toM(s0 + nB * bp, v0), toM(s0 + nB * bp, v1), toM(s0, v1), toM(s0, v0)], bays, comp: b.comp, rot, bayM: o.w, toMap: toM, shear: 0, bayAngle: 90, manual: true, block: b }; });
       const lanes = []; for (let k = 0; k < rows.length - 1; k++) { const g0 = rows[k][1], g1 = rows[k + 1][0]; if (g1 - g0 >= 3) { const vm = (g0 + g1) / 2 * mP; lanes.push([toM(s0, vm), toM(s0 + nB * bp, vm)]); } }
-      if (!LVS) { LVS = { map, out: { rows: [], bays: [], aisles: [], blocks: [] }, runs: [], nearest: runs[0], pu: runs[0].bays[0].u, edited: false, bayPx: BAY / mpp, mpp, obst: { blds: [], roads: [], aisles: [] }, lot: null };
-        A.setPin(runs[0].bays[0].c[1], runs[0].bays[0].c[0], null, { rot, lot: { label: 'Rows drawn by hand', kind: 'Surface', rows: [], ring: null, lines: null, rot, capText: 'rows drawn on the map' } }); }
-      runs.forEach(r => { LVS.runs.push(r); LVS.out.rows.push(r.ring); r.bays.forEach(b => LVS.out.bays.push(b)); }); lanes.forEach(l => LVS.out.aisles.push(l));
-      ROWS.undo.push({ runs, lanes }); hookMap(map); tools.hidden = false; draw(map, LVS.out); return runs; }
+      return { runs, lanes, nB, depth: rows.length ? rows[rows.length - 1][1] : 0 }; }
+    // put a block into the plan (replacing its previous rows), or take it out
+    function place(b) { const map = A.map(), r = make(b);
+      if (!LVS) { if (!r.runs.length) return r; LVS = { map, out: { rows: [], bays: [], aisles: [], blocks: [] }, runs: [], nearest: r.runs[0], pu: r.runs[0].bays[0].u, edited: false, bayPx: BAY / mppAt(b.lat), mpp: mppAt(b.lat), obst: { blds: [], roads: [], aisles: [] }, lot: null };
+        A.setPin(r.runs[0].bays[0].c[1], r.runs[0].bays[0].c[0], null, { rot: r.runs[0].rot, lot: { label: 'Rows drawn by hand', kind: 'Surface', rows: [], ring: null, lines: null, rot: r.runs[0].rot, capText: 'rows drawn on the map' } }); }
+      const was = LVS.nearest && LVS.nearest.block === b;
+      LVS.runs = LVS.runs.filter(x => x.block !== b).concat(r.runs); LVS.out.rows = LVS.runs.map(x => x.ring); LVS.out.bays = LVS.runs.flatMap(x => x.bays);
+      LVS.out.aisles = LVS.out.aisles.filter(l => !(b.lanes || []).includes(l)).concat(r.lanes); b.lanes = r.lanes; b.runs = r.runs;
+      if ((was || !LVS.runs.includes(LVS.nearest)) && LVS.runs.length) { LVS.nearest = LVS.runs[0]; LVS.pu = LVS.runs[0].bays[0].u; }
+      hookMap(map); tools.hidden = false; draw(map, LVS.out); return r; }
+    function remove(b) { if (!LVS) return; LVS.runs = LVS.runs.filter(x => x.block !== b); LVS.out.rows = LVS.runs.map(x => x.ring); LVS.out.bays = LVS.runs.flatMap(x => x.bays);
+      LVS.out.aisles = LVS.out.aisles.filter(l => !(b.lanes || []).includes(l)); if (!LVS.runs.includes(LVS.nearest) && LVS.runs.length) { LVS.nearest = LVS.runs[0]; LVS.pu = LVS.runs[0].bays[0].u; }
+      ROWS.blocks = ROWS.blocks.filter(x => x !== b); draw(LVS.map, LVS.out); }
+    // transforms of a block's line: turn about its middle, move by metres, lengthen or shorten by whole bays
+    const turn = (b, deg) => { const cx = (b.p0[0] + b.p1[0]) / 2, cy = (b.p0[1] + b.p1[1]) / 2, a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+      const R = ([x, y]) => [cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c]; b.p0 = R(b.p0); b.p1 = R(b.p1); b.angle = (b.angle || 0) + deg; };
+    const move = (b, east, north) => { const mP = 1 / mppAt(b.lat); [b.p0, b.p1] = [b.p0, b.p1].map(([x, y]) => [x + east * mP, y - north * mP]); };
+    const stretch = (b, bays) => { const L = Math.hypot(b.p1[0] - b.p0[0], b.p1[1] - b.p0[1]), add = bays * b.o.w / mppAt(b.lat); if (L + add < b.o.w / mppAt(b.lat)) return;
+      const ux = (b.p1[0] - b.p0[0]) / L, uy = (b.p1[1] - b.p0[1]) / L; b.p1 = [b.p1[0] + ux * add, b.p1[1] + uy * add]; };
     function closePop() { if (ROWS.pop) { ROWS.pop.remove(); ROWS.pop = null; } const map = A.map(); if (map && map.getSource('lv-rowprev')) map.getSource('lv-rowprev').setData({ type: 'FeatureCollection', features: [] }); }
-    function openPop() { closePop(); const pop = ROWS.pop = document.createElement('div'); pop.className = 'tw-rowpop';
-      pop.innerHTML = '<h4>Rows to add</h4><label>Number of rows <input type="number" name="n" min="1" max="40" value="2"></label>'
-        + '<label>Layout <select name="layout"><option value="pairs">Back-to-back pairs, lane between</option><option value="each">A lane after every row</option></select></label>'
-        + '<label>Bay width (m) <input type="number" name="w" step="0.1" min="2.2" max="4" value="2.5"></label><label>Bay depth (m) <input type="number" name="d" step="0.1" min="4" max="6.5" value="5"></label>'
-        + '<label>Lane width (m) <input type="number" name="lane" step="0.5" min="3" max="9" value="6"></label>'
-        + '<div class="btns"><button type="button" class="go" data-a="add">Add rows</button><button type="button" data-a="flip">Other side</button><button type="button" data-a="undo">Undo last</button><button type="button" data-a="x">Close</button></div><p></p>';
+    const optsHTML = o => '<label>Number of rows <input type="number" name="n" min="1" max="40" value="' + o.n + '"></label>'
+      + '<label>Layout <select name="layout"><option value="pairs"' + (o.layout === 'pairs' ? ' selected' : '') + '>Back-to-back pairs, lane between</option><option value="each"' + (o.layout === 'each' ? ' selected' : '') + '>A lane after every row</option></select></label>'
+      + '<label>Bay width (m) <input type="number" name="w" step="0.1" min="2.2" max="4" value="' + o.w + '"></label><label>Bay depth (m) <input type="number" name="d" step="0.1" min="4" max="6.5" value="' + o.d + '"></label>'
+      + '<label>Lane width (m) <input type="number" name="lane" step="0.5" min="3" max="9" value="' + o.lane + '"></label>';
+    const readOpts = (pop, side) => { const f = n => pop.querySelector(`[name=${n}]`).value; return { n: Math.max(1, Math.min(40, parseInt(f('n'), 10) || 1)), layout: f('layout'), w: parseFloat(f('w')) || 2.5, d: parseFloat(f('d')) || 5, lane: parseFloat(f('lane')) || 6, side }; };
+    // the new block: preview first, Add makes it real and opens its edit panel
+    function openNew() { closePop(); const b = { p0: ROWS.p0, p1: ROWS.p1, lat: ROWS.ll0[1], o: { n: 2, layout: 'pairs', w: 2.5, d: 5, lane: 6, side: 1 }, comp: 700000 + Math.floor(Math.random() * 90000) * 10 };
+      const pop = ROWS.pop = document.createElement('div'); pop.className = 'tw-rowpop';
+      pop.innerHTML = '<h4>Rows to add</h4>' + optsHTML(b.o) + '<div class="btns"><button type="button" class="go" data-a="add">Add rows</button><button type="button" data-a="flip">Other side</button><button type="button" data-a="x">Cancel</button></div><p></p>';
       A.dlg.appendChild(pop);
-      const val = () => { const f = n => pop.querySelector(`[name=${n}]`).value; return { n: Math.max(1, Math.min(40, parseInt(f('n'), 10) || 1)), layout: f('layout'), w: parseFloat(f('w')) || 2.5, d: parseFloat(f('d')) || 5, lane: parseFloat(f('lane')) || 6, side: ROWS.side }; };
-      const preview = () => { const o = val(), r = build(o, false); showPrev(A.map(), r.flatMap(x => x.bays.map(b => b.ring)));
-        const per = r.length ? r[0].bays.length : 0; pop.querySelector('p').textContent = r.length ? `${o.n} row${o.n > 1 ? 's' : ''} × ${per} bays = ${o.n * per} spaces, ${(r.length && (plan(o).rows.slice(-1)[0][1])).toFixed(1)} m deep. Dashed blue is the preview.` : 'The line is shorter than one bay.'; };
+      const preview = () => { b.o = readOpts(pop, b.o.side); const r = make(b); showPrev(A.map(), r.runs.flatMap(x => x.bays.map(y => y.ring)));
+        pop.querySelector('p').textContent = r.runs.length ? `${b.o.n} row${b.o.n > 1 ? 's' : ''} × ${r.nB} bays = ${b.o.n * r.nB} spaces, ${r.depth.toFixed(1)} m deep. Dashed blue is the preview.` : 'The line is shorter than one bay.'; };
       pop.addEventListener('input', preview);
-      pop.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const a = b.dataset.a;
-        if (a === 'x') return closePop();
-        if (a === 'flip') { ROWS.side *= -1; return preview(); }
-        if (a === 'undo') { const u = ROWS.undo.pop(); if (!u || !LVS) { hint('Nothing to undo.'); return; }
-          LVS.runs = LVS.runs.filter(r => !u.runs.includes(r)); LVS.out.rows = LVS.runs.map(r => r.ring); LVS.out.bays = LVS.runs.flatMap(r => r.bays); LVS.out.aisles = LVS.out.aisles.filter(l => !u.lanes.includes(l)); draw(LVS.map, LVS.out); hint('Last rows removed.'); return; }
-        if (a === 'add') { const o = val(), r = build(o, true); if (!r.length) { hint('Draw a longer line: it must be longer than one bay.'); return; }
-          const sp = r.reduce((t, x) => t + x.bays.length, 0); closePop(); hint(`${r.length} row${r.length > 1 ? 's' : ''} added, ${sp} spaces. Drag across bays to place stalls, use Cover whole car park, or press ＋ Rows again for more.`); } });
+      pop.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return; const a = t.dataset.a;
+        if (a === 'x') return closePop(); if (a === 'flip') { b.o.side *= -1; return preview(); }
+        if (a === 'add') { b.o = readOpts(pop, b.o.side); const r = place(b); if (!r.runs.length) { hint('Draw a longer line: it must be longer than one bay.'); return; }
+          ROWS.blocks.push(b); b.name = 'Block ' + ROWS.blocks.length; openEdit(b); hint(`${b.name}: ${r.runs.length} rows, ${r.runs.length * r.nB} spaces. Turn, move or resize it in the panel; drag across bays to place stalls.`); } });
       preview(); }
+    // edit panel for a block already in the plan: everything changes live
+    function openEdit(b) { closePop(); ROWS.cur = b; const pop = ROWS.pop = document.createElement('div'); pop.className = 'tw-rowpop';
+      pop.innerHTML = `<h4>${b.name}</h4>`
+        + '<div class="grp"><span>Turn</span><button type="button" data-t="-15">↺ 15°</button><button type="button" data-t="-5">↺ 5°</button><button type="button" data-t="5">↻ 5°</button><button type="button" data-t="15">↻ 15°</button></div>'
+        + '<label>Angle <input type="range" name="ang" min="-180" max="180" step="1" value="' + Math.round(b.angle || 0) + '" style="width:130px"><output>' + Math.round(b.angle || 0) + '°</output></label>'
+        + '<div class="grp"><span>Move 1 m</span><button type="button" data-m="0,1">↑</button><button type="button" data-m="0,-1">↓</button><button type="button" data-m="-1,0">←</button><button type="button" data-m="1,0">→</button></div>'
+        + '<div class="grp"><span>Length</span><button type="button" data-l="-1">− 1 bay</button><button type="button" data-l="1">+ 1 bay</button></div>'
+        + optsHTML(b.o) + '<div class="btns"><button type="button" class="go" data-a="done">Done</button><button type="button" data-a="flip">Other side</button><button type="button" data-a="del">Delete block</button></div><p></p>';
+      A.dlg.appendChild(pop);
+      const info = () => { const r = b.runs || []; pop.querySelector('p').textContent = `${r.length} rows × ${r.length ? r[0].bays.length : 0} bays = ${r.reduce((t, x) => t + x.bays.length, 0)} spaces.`; pop.querySelector('output').textContent = Math.round(b.angle || 0) + '°'; pop.querySelector('[name=ang]').value = Math.round(b.angle || 0); };
+      const redo = () => { place(b); info(); };
+      pop.addEventListener('input', e => { if (e.target.name === 'ang') { turn(b, (+e.target.value) - (b.angle || 0)); redo(); return; } b.o = readOpts(pop, b.o.side); redo(); });
+      pop.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
+        if (t.dataset.t) { turn(b, +t.dataset.t); return redo(); }
+        if (t.dataset.m) { const [ex, ny] = t.dataset.m.split(',').map(Number); move(b, ex, ny); return redo(); }
+        if (t.dataset.l) { stretch(b, +t.dataset.l); return redo(); }
+        const a = t.dataset.a; if (a === 'done') { closePop(); ROWS.cur = null; hint(`${b.name} set. Press ＋ Rows to draw more or to edit a block again.`); return; }
+        if (a === 'flip') { b.o.side *= -1; return redo(); }
+        if (a === 'del') { remove(b); closePop(); ROWS.cur = null; hint(`${b.name} deleted.`); } });
+      info(); }
+    // ＋ Rows: draw a new block, or pick one to edit when there are some
+    function openPick() { closePop(); const pop = ROWS.pop = document.createElement('div'); pop.className = 'tw-rowpop';
+      pop.innerHTML = '<h4>Rows</h4><div class="btns"><button type="button" class="go" data-a="new">Draw new rows</button>' + ROWS.blocks.map((b, i) => `<button type="button" data-i="${i}">Edit ${b.name}</button>`).join('') + '<button type="button" data-a="x">Close</button></div>';
+      A.dlg.appendChild(pop);
+      pop.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return; if (t.dataset.i) return openEdit(ROWS.blocks[+t.dataset.i]);
+        if (t.dataset.a === 'x') return closePop(); startDraw(); }); }
+    function startDraw() { const map = A.map(); if (!map) return; closePop(); ROWS.mode = 1; map.getCanvas().style.cursor = 'crosshair'; hint('Click where the first row starts, then where it ends (along the row). Esc to cancel.'); }
     rowsBtn.addEventListener('click', () => { const map = A.map(); if (!map) return; if (ROWS.mode) { ROWS.mode = 0; map.getCanvas().style.cursor = ''; hint('Drawing rows cancelled.'); return; }
-      closePop(); ROWS.mode = 1; ROWS.side = 1; map.getCanvas().style.cursor = 'crosshair'; hint('Click where the first row starts, then where it ends (along the row). Esc to cancel.'); });
+      const live = LVS ? ROWS.blocks.filter(b => LVS.runs.some(r => r.block === b)) : []; ROWS.blocks = live; if (live.length) openPick(); else startDraw(); });
     { const cc = () => A.map() && A.map().getCanvasContainer(); let down = null;
       const onDown = e => { if (!ROWS.mode) return; down = [e.clientX, e.clientY]; };
       const onClick = e => { const map = A.map(); if (!ROWS.mode || !map || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return; e.stopPropagation(); e.preventDefault();
         const r = map.getCanvas().getBoundingClientRect(), ll = map.unproject([e.clientX - r.left, e.clientY - r.top]), px = toPx(ll.lng, ll.lat);
         if (ROWS.mode === 1) { ROWS.p0 = px; ROWS.ll0 = [ll.lng, ll.lat]; ROWS.mode = 2; hint('Now click where the row ends.'); }
-        else { ROWS.p1 = px; ROWS.mode = 0; map.getCanvas().style.cursor = ''; openPop(); hint('Choose the rows, check the dashed preview, then Add rows. Other side flips which side of the line they go.'); } };
+        else { ROWS.p1 = px; ROWS.mode = 0; map.getCanvas().style.cursor = ''; openNew(); hint('Choose the rows, check the dashed preview, then Add rows. Other side flips which side of the line they go.'); } };
       A.dlg.addEventListener('mousedown', e => { if (cc() && cc().contains(e.target)) onDown(e); }, true);
       A.dlg.addEventListener('click', e => { if (cc() && cc().contains(e.target)) onClick(e); }, true);
       document.addEventListener('keydown', e => { if (e.key === 'Escape' && ROWS.mode) { ROWS.mode = 0; const m = A.map(); if (m) m.getCanvas().style.cursor = ''; hint('Drawing rows cancelled.'); } }); }
