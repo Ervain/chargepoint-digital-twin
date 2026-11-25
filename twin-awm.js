@@ -113,7 +113,7 @@
     // ---- 5b. the ChargePoint logo on the black wall, centred above the screen (screen top 1.75 m, header line from 2.33 m) ----
     { const LW = 1.4, LH = LW * 512 / 2048, cv = document.createElement('canvas'); cv.width = 2048; cv.height = 512; const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8;
       const lm = new T.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -16 });
-      const lg = new T.Mesh(new T.PlaneGeometry(LW, LH), lm); lg.position.set(0, 2.04, WALL + 0.012); lg.renderOrder = 3; G.add(lg);
+      const lg = new T.Mesh(new T.PlaneGeometry(LW, LH), lm); lg.position.set(0, 2.04, WALL + 0.012); lg.renderOrder = 3; G.add(lg); lg.scale.setScalar(0.7);   // smaller (owner, 25 Nov 2026); the page still finds it by its 1.4 m plane and lifts it to the light line
       const paint = () => { const P = H.logo && H.logo(); if (!P || !P.mark || !P.word) { setTimeout(paint, 200); return; } const c = cv.getContext('2d'); c.clearRect(0, 0, 2048, 512);
         let mh = 300, wh = 120, gap = 60; const mr = P.mark.width / P.mark.height, wr = P.word.width / P.word.height, k = Math.min(1, 1880 / (mh * mr + gap + wh * wr)); mh *= k; wh *= k; gap *= k;   // fit inside the panel
         const mw = mh * mr, ww = wh * wr, x0 = 1024 - (mw + gap + ww) / 2, cy = 256;
