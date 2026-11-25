@@ -592,7 +592,7 @@
     // tools bar under the map, shown once the bays are read
     const tools = document.createElement('div'); tools.className = 'tw-lvtools'; tools.hidden = true;
     tools.innerHTML = '<button type="button" class="tw-lvdraw" aria-pressed="false" title="Drag across bays to make them charging stalls. Hold Shift to remove. Right-click a stall for more.">✎ Draw stalls</button>'
-      + '<span class="tw-lvstat"></span><button type="button" class="tw-lvcover" title="Put canopies along every parking row found, staying inside the car park, then build">▦ Cover whole car park</button><button type="button" class="tw-lvdxf" title="Download the layout as an AutoCAD drawing (DXF): bays, charging stalls, lanes, in metres">Site plan · DXF</button>';
+      + '<span class="tw-lvstat"></span><button type="button" class="tw-lvcover" title="Put canopies along every parking row found, staying inside the car park, then build">▦ Cover whole car park</button><button type="button" class="tw-lvdxf" title="Save the layout as an AutoCAD drawing (DXF): real coordinates (UTM), layers, bays, charging stalls, canopies, cable routes, dimensions, title block and charger schedule">AutoCAD plan · DXF</button>';
     A.dlg.querySelector('.tw-map-foot').before(tools);
     const drawBtn = tools.querySelector('.tw-lvdraw'); let drawing = false;
     const setDraw = on => { drawing = on; drawBtn.setAttribute('aria-pressed', on); const map = LVS && LVS.map; if (!map) return;
@@ -791,6 +791,7 @@ font:500 12px var(--display,Helvetica);display:flex;align-items:center;gap:8px;f
 
     // ---- the drawing for AutoCAD: DXF (R12, metres, north up, origin at the middle of the stalls) ----
     tools.querySelector('.tw-lvdxf').addEventListener('click', () => { if (!LVS) return;
+      if (S.cadExport) { S.cadExport({ LVS, COVER, ev: evBays() }); return; }   // the full AutoCAD drawing (twin-cad.js); the plain export below stays as a fallback
       const ev = evBays(), all = LVS.runs.flatMap(r => r.bays), ref = (ev.length ? ev : all).reduce((a, b, _, arr) => [a[0] + b.c[0] / arr.length, a[1] + b.c[1] / arr.length], [0, 0]);
       const G = window.TwinGeo, fr = G.frame(ref[0], ref[1]), X = q => fr.toLocal(q[0], q[1])[0].toFixed(3), Y = q => fr.toLocal(q[0], q[1])[1].toFixed(3);
       const meta = ['ChargePoint Digital Twin site plan', fr.crs, `Origin WGS84 ${ref[1].toFixed(7)}, ${ref[0].toFixed(7)}`, 'Units: metres. Source: Esri World Imagery (zoom 19) read by Lane Vision, OpenStreetMap for buildings and roads',
