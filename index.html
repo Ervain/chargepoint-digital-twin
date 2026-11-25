@@ -1853,6 +1853,7 @@ window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () =>
         const F2 = document.createElement('canvas'); F2.width = w; F2.height = h; const f = F2.getContext('2d'); f.imageSmoothingEnabled = true; f.imageSmoothingQuality = 'high'; f.drawImage(o, 0, 0, w, h); return F2; };
       const add = (L, a) => { c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = a; c.drawImage(L, 0, 0); c.restore(); };
       { const g = c.createRadialGradient(tx, h - 0.9 * k, 0, tx, h - 0.9 * k, 3.2 * k); g.addColorStop(0, 'rgba(24,48,66,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }   // a faint deep-blue depth behind the word
+      if ('letterSpacing' in c) c.letterSpacing = '0px'; return;   // the word 'charge' was taken off the wall (owner, 25 Nov 2026): the dark field and its soft blue depth stay
       const tg = c.createLinearGradient(tx - tw / 2, h - 1.9 * k, tx + tw / 2, h); tg.addColorStop(0, '#16191d'); tg.addColorStop(0.5, '#0d0f11'); tg.addColorStop(1, '#121416'); c.fillStyle = tg; c.fillText('charge', tx, ty);   // dark glass faces
       const fadeA = c.createRadialGradient(tx - 0.4 * k, h - 1.5 * k, 0, tx - 0.4 * k, h - 1.5 * k, 3.4 * k); fadeA.addColorStop(0, 'rgba(0,0,0,1)'); fadeA.addColorStop(0.55, 'rgba(0,0,0,.55)'); fadeA.addColorStop(1, 'rgba(0,0,0,0)');
       const fadeB = c.createLinearGradient(0, h - 2.0 * k, 0, h - 0.1 * k); fadeB.addColorStop(0, 'rgba(0,0,0,.9)'); fadeB.addColorStop(1, 'rgba(0,0,0,0)');
