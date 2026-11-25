@@ -1,6 +1,8 @@
 // Al Wahda Mall basement, richer: real surface detail and a fuller car park around the two charging bays, plus Add car / Clear cars.
 // Everything here is added to the project's own basement group, so it shows only on the Al Wahda Mall project.
 (() => {
+  // scanned textures (Poly Haven, CC0) sit next to this file; its own address gives the folder and the version query
+  const ME = (document.currentScript && document.currentScript.src) || '', BASE = ME.replace(/twin-awm\.js(\?.*)?$/, ''), VQ = (ME.match(/\?.*$/) || [''])[0];
   const start = () => { const S = window.__twin, H = window.__twinAWM; if (!S || !S.api || !H) return; const A = S.api, T = A.T, AWM = H.AWM, E = AWM.env;
     const BW = 2.6, Z0 = 0.25, BL = 5.2, WALL = -0.75, CEIL = 3.3;
     let sd = 11; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
@@ -12,19 +14,20 @@
         for (let i = 0; i < n * n; i++) { const v = 128 + (rnd() - 0.5) * 255 * a; im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255 * amp; } g.putImageData(im, 0, 0);
         c.imageSmoothingEnabled = true; c.globalCompositeOperation = 'overlay'; c.drawImage(s, 0, 0, w, h); c.globalCompositeOperation = 'source-over'; }); };
     const find = (fn) => E.children.find(fn);
+    const ptex = (name, srgb, rx, ry) => { const t = new T.TextureLoader().load(BASE + name + VQ, () => A.draw()); if (srgb) t.encoding = T.sRGBEncoding; t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(rx, ry); t.anisotropy = 8; return t; };
+    const PH = (kind, rx, ry) => ({ map: ptex(`awm_${kind}_map.jpg`, true, rx, ry), normalMap: ptex(`awm_${kind}_nor.jpg`, false, rx, ry), roughnessMap: ptex(`awm_${kind}_rough.jpg`, false, rx, ry) });
     const plane = (w, h) => o => o.isMesh && o.geometry.type === 'PlaneGeometry' && Math.abs(o.geometry.parameters.width - w) < 0.01 && Math.abs(o.geometry.parameters.height - h) < 0.01;
 
-    // ---- 1. floor: sealed concrete that reads as a real basement slab: trowel variation, expansion joints every 5 m, and a satin sheen that varies ----
+    // ---- 1. floor: a scanned car park slab ("Garage Floor", Poly Haven, CC0), tiled every 2.7 m and tinted to a neutral grey, with its real relief and satin sheen ----
     const floor = find(o => plane(80, 80)(o) && o.position.y < 0.1);
-    if (floor) { const m = floor.material;
-      m.bumpMap = canvasTex(1024, 1024, (c, w, h) => { noise(c, w, h, [[8, 0.5], [32, 0.5], [128, 0.4], [512, 0.35]], 128, 0.6);
-        c.strokeStyle = 'rgb(40,40,40)'; c.lineWidth = 5; c.strokeRect(0, 0, w, h); }, [16, 16]); m.bumpScale = 0.018;
-      m.roughnessMap = canvasTex(1024, 1024, (c, w, h) => { noise(c, w, h, [[4, 0.8], [16, 0.6], [64, 0.4]], 140, 0.7); }, [16, 16]); m.roughness = 0.95; m.envMapIntensity = 0.9;
-      m.color.set(0x55585b); m.needsUpdate = true; }
+    if (floor) { const m = floor.material, P = PH('floor', 30, 30);
+      m.map = P.map; m.normalMap = P.normalMap; m.normalScale = new T.Vector2(0.8, 0.8); m.roughnessMap = P.roughnessMap; m.bumpMap = null;
+      m.roughness = 1; m.metalness = 0.02; m.envMapIntensity = 0.9; m.color.setRGB(0.40, 0.43, 0.51); m.needsUpdate = true; }
 
     // ---- 2. walls: fine plaster relief and the grime a basement wall collects near the floor ----
     E.children.filter(o => o.isMesh && o.geometry.type === 'PlaneGeometry' && Math.abs(o.geometry.parameters.height - CEIL) < 0.01 && o.material.map && o.material.color.getHex() === 0xece5d4 && Math.abs(o.geometry.parameters.width - 60) > 0.01)
-      .forEach(o => { const m = o.material; m.bumpMap = canvasTex(512, 512, (c, w, h) => noise(c, w, h, [[16, 0.6], [64, 0.5], [256, 0.4]], 128, 0.6), [o.geometry.parameters.width / 2, 2]); m.bumpScale = 0.01; m.needsUpdate = true; });
+      .forEach(o => { const m = o.material, P = PH('wall', o.geometry.parameters.width / 2.5, CEIL / 2.5);   // scanned plaster ("Plastered Wall 04", Poly Haven, CC0), cream kept
+        m.map = P.map; m.normalMap = P.normalMap; m.normalScale = new T.Vector2(0.6, 0.6); m.roughnessMap = P.roughnessMap; m.roughness = 1; m.bumpMap = null; m.needsUpdate = true; });
     const grime = new T.MeshBasicMaterial({ map: canvasTex(16, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(40,34,26,0)'); g.addColorStop(0.75, 'rgba(40,34,26,.22)'); g.addColorStop(1, 'rgba(30,26,20,.45)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }), transparent: true, depthWrite: false });
     const G = new T.Group(); E.add(G);
     // the back wall either side of the artwork keeps its original cream plaster, untouched (owner's choice)
@@ -32,10 +35,10 @@
 
     // ---- 3. ceiling: board-marked concrete soffit, downstand beams every 5.2 m, and linear LED fittings ----
     const ceil = find(o => plane(80, 80)(o) && o.position.y > 3);
-    const conc = new T.MeshStandardMaterial({ color: 0x9a9894, roughness: 0.92, bumpMap: canvasTex(512, 512, (c, w, h) => { noise(c, w, h, [[16, 0.6], [64, 0.5], [256, 0.5]], 128, 0.6);
-      c.strokeStyle = 'rgba(70,70,70,.16)'; c.lineWidth = 2; for (let y = 0; y < h; y += h / 6) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); } }, [20, 20]), bumpScale: 0.012 });
-    if (ceil) { ceil.material = conc.clone(); ceil.material.bumpMap = conc.bumpMap; }
-    for (let k = 0; k < 4; k++) { const z = WALL + 0.25 + k * 5.2; const b = new T.Mesh(new T.BoxGeometry(60, 0.5, 0.4), conc); b.position.set(0, CEIL - 0.25, z); b.receiveShadow = true; G.add(b); }
+    // board-formed concrete soffit and beams ("Concrete Slab Wall", Poly Haven, CC0)
+    const conc = new T.MeshStandardMaterial(Object.assign({ color: 0xc9c7c2, roughness: 1, normalScale: new T.Vector2(0.7, 0.7) }, PH('ceil', 1, 1)));
+    if (ceil) { const P = PH('ceil', 27, 27); ceil.material = new T.MeshStandardMaterial(Object.assign({ color: 0xc9c7c2, roughness: 1, normalScale: new T.Vector2(0.7, 0.7) }, P)); }
+    for (let k = 0; k < 4; k++) { const z = WALL + 0.25 + k * 5.2; const bm = conc.clone(); ['map', 'normalMap', 'roughnessMap'].forEach(k => { bm[k] = conc[k].clone(); bm[k].needsUpdate = true; bm[k].repeat.set(20, 0.2); }); const b = new T.Mesh(new T.BoxGeometry(60, 0.5, 0.4), bm); b.position.set(0, CEIL - 0.25, z); b.receiveShadow = true; G.add(b); }
     const tubeM = new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }); tubeM.color.setScalar(1.6); const FIT = [];
     const housing = new T.MeshStandardMaterial({ color: 0xd9d9d6, roughness: 0.5, metalness: 0.3 });
     for (const z of [2.0, 7.2, 12.4]) for (const x of [-7.8, -3.9, 0, 3.9, 7.8]) { if (z === 2.0 && Math.abs(x) < 3) continue;
@@ -43,7 +46,7 @@
       const tb = new T.Mesh(new T.BoxGeometry(1.42, 0.02, 0.06), tubeM); tb.position.set(x, CEIL - 0.1, z); G.add(tb); FIT.push([x, z]); }
 
     // ---- 4. structure: concrete columns either side of the charging bays, with the car park's blue banding and a corner guard ----
-    const colM = new T.MeshStandardMaterial({ color: 0xe9e4d8, roughness: 0.85, bumpMap: conc.bumpMap, bumpScale: 0.008 });
+    const colM = new T.MeshStandardMaterial(Object.assign({ color: 0xe9e4d8, roughness: 1, normalScale: new T.Vector2(0.5, 0.5) }, PH('wall', 0.25, 1.3)));   // scanned plaster
     const bandM = new T.MeshStandardMaterial({ color: 0x2c4f9c, roughness: 0.7 }), guardM = new T.MeshStandardMaterial({ color: 0xf2c200, roughness: 0.6 }), blackM = new T.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.7 });
     // the two beside the charging wall were taken out (owner's choice); the column left of the artwork now lives in the page itself
     for (const x of [-(3 * BW + 0.95), 3 * BW + 0.95]) { const z = WALL + 0.35;
