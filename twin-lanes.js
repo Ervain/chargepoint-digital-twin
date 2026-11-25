@@ -81,6 +81,69 @@
     }
     allBtn.addEventListener('click', runAll);
 
+    // ---- rows drawn by hand: for car parks the photo cannot read (unmarked, empty or covered). Click where the first row starts and
+    //      where it ends; choose how many rows and the layout; the rows join the plan like detected ones (stalls, cover, DXF all work) ----
+    const rowsBtn = document.createElement('button'); rowsBtn.type = 'button'; rowsBtn.className = 'tw-lv tw-lvrows'; rowsBtn.textContent = '＋ Rows';
+    rowsBtn.title = 'Draw parking rows yourself: click the start and the end of the first row, then choose how many rows'; allBtn.after(rowsBtn);
+    { const st = document.createElement('style'); st.textContent = `.tw-rowpop{position:absolute;right:16px;top:64px;z-index:40;width:270px;background:#fff;border-radius:16px;box-shadow:0 10px 34px rgba(0,0,0,.22);padding:14px;font:500 13px var(--display,Helvetica);color:#1d1d1f}
+.tw-rowpop h4{margin:0 0 8px;font:700 14px var(--display,Helvetica)}.tw-rowpop label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0}.tw-rowpop input,.tw-rowpop select{width:96px;font:500 13px var(--display,Helvetica);padding:4px 6px;border:1px solid #d2d2d7;border-radius:8px}
+.tw-rowpop .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.tw-rowpop button{appearance:none;border:0;border-radius:999px;padding:7px 12px;font:600 12px var(--display,Helvetica);cursor:pointer;background:#f2f2f4;color:#1d1d1f}
+.tw-rowpop button.go{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-rowpop p{margin:6px 0 0;color:#6e6e73;font-size:12px;line-height:1.35}`; document.head.appendChild(st); }
+    const ROWS = { mode: 0, p0: null, p1: null, pop: null, undo: [], side: 1 };
+    const prevSrc = { type: 'FeatureCollection', features: [] };
+    const showPrev = (map, rings) => { prevSrc.features = rings.map(r => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [r] } }));
+      if (!map.getSource('lv-rowprev')) { map.addSource('lv-rowprev', { type: 'geojson', data: prevSrc }); map.addLayer({ id: 'lv-rowprev', type: 'line', source: 'lv-rowprev', paint: { 'line-color': '#3BA9E0', 'line-width': 2, 'line-dasharray': [2, 1.5] } }); }
+      else map.getSource('lv-rowprev').setData(prevSrc); };
+    // the layout across the rows, in metres from the drawn line: back-to-back pairs with a lane after each pair, or a lane after every row
+    function plan(o) { const W = o.w, D = o.d, Ln = o.lane, n = o.n, rows = []; let v = 0;
+      for (let i = 0; i < n; i++) { rows.push([v, v + D]); v += D; const pairEnd = o.layout === 'pairs' ? i % 2 === 1 : true; if (pairEnd && i < n - 1) v += Ln; }
+      return { rows, W }; }
+    function build(o, commit) { const map = A.map(), lat = ROWS.ll0[1], mpp = 156543.034 * Math.cos(lat * Math.PI / 180) / 2 ** Z, mP = 1 / mpp;
+      const [x0, y0] = ROWS.p0, [x1, y1] = ROWS.p1, Lp = Math.hypot(x1 - x0, y1 - y0); if (Lp * mpp < o.w) return [];
+      const U = [(x1 - x0) / Lp, (y1 - y0) / Lp], N = [-U[1] * o.side, U[0] * o.side], toM = (u, v) => toLL(x0 + u * U[0] + v * N[0], y0 + u * U[1] + v * N[1]);
+      const { rows } = plan(o), nB = Math.floor(Lp * mpp / o.w), s0 = (Lp - nB * o.w * mP) / 2, bp = o.w * mP, rot = Math.round(((-Math.atan2(U[1], U[0]) * 180 / Math.PI) % 180 + 180) % 180), comp = 700000 + ROWS.undo.length * 10;
+      const runs = rows.map(([a, b]) => { const v0 = a * mP, v1 = b * mP, bays = [];
+        for (let j = 0; j < nB; j++) { const a0 = s0 + j * bp, a1 = a0 + bp; bays.push({ ring: [toM(a0, v0), toM(a1, v0), toM(a1, v1), toM(a0, v1), toM(a0, v0)], c: toM((a0 + a1) / 2, (v0 + v1) / 2), u: (a0 + a1) / 2, v: (v0 + v1) / 2 }); }
+        const u0 = s0, u1 = s0 + nB * bp; return { v0, v1, u0, u1, ring: [toM(u0, v0), toM(u1, v0), toM(u1, v1), toM(u0, v1), toM(u0, v0)], bays, comp, rot, bayM: o.w, toMap: toM, shear: 0, bayAngle: 90, manual: true }; });
+      if (!commit) return runs;
+      // lanes: the centre line of each gap between rows
+      const lanes = []; for (let k = 0; k < rows.length - 1; k++) { const g0 = rows[k][1], g1 = rows[k + 1][0]; if (g1 - g0 >= 3) { const vm = (g0 + g1) / 2 * mP; lanes.push([toM(s0, vm), toM(s0 + nB * bp, vm)]); } }
+      if (!LVS) { LVS = { map, out: { rows: [], bays: [], aisles: [], blocks: [] }, runs: [], nearest: runs[0], pu: runs[0].bays[0].u, edited: false, bayPx: BAY / mpp, mpp, obst: { blds: [], roads: [], aisles: [] }, lot: null };
+        A.setPin(runs[0].bays[0].c[1], runs[0].bays[0].c[0], null, { rot, lot: { label: 'Rows drawn by hand', kind: 'Surface', rows: [], ring: null, lines: null, rot, capText: 'rows drawn on the map' } }); }
+      runs.forEach(r => { LVS.runs.push(r); LVS.out.rows.push(r.ring); r.bays.forEach(b => LVS.out.bays.push(b)); }); lanes.forEach(l => LVS.out.aisles.push(l));
+      ROWS.undo.push({ runs, lanes }); hookMap(map); tools.hidden = false; draw(map, LVS.out); return runs; }
+    function closePop() { if (ROWS.pop) { ROWS.pop.remove(); ROWS.pop = null; } const map = A.map(); if (map && map.getSource('lv-rowprev')) map.getSource('lv-rowprev').setData({ type: 'FeatureCollection', features: [] }); }
+    function openPop() { closePop(); const pop = ROWS.pop = document.createElement('div'); pop.className = 'tw-rowpop';
+      pop.innerHTML = '<h4>Rows to add</h4><label>Number of rows <input type="number" name="n" min="1" max="40" value="2"></label>'
+        + '<label>Layout <select name="layout"><option value="pairs">Back-to-back pairs, lane between</option><option value="each">A lane after every row</option></select></label>'
+        + '<label>Bay width (m) <input type="number" name="w" step="0.1" min="2.2" max="4" value="2.5"></label><label>Bay depth (m) <input type="number" name="d" step="0.1" min="4" max="6.5" value="5"></label>'
+        + '<label>Lane width (m) <input type="number" name="lane" step="0.5" min="3" max="9" value="6"></label>'
+        + '<div class="btns"><button type="button" class="go" data-a="add">Add rows</button><button type="button" data-a="flip">Other side</button><button type="button" data-a="undo">Undo last</button><button type="button" data-a="x">Close</button></div><p></p>';
+      A.dlg.appendChild(pop);
+      const val = () => { const f = n => pop.querySelector(`[name=${n}]`).value; return { n: Math.max(1, Math.min(40, parseInt(f('n'), 10) || 1)), layout: f('layout'), w: parseFloat(f('w')) || 2.5, d: parseFloat(f('d')) || 5, lane: parseFloat(f('lane')) || 6, side: ROWS.side }; };
+      const preview = () => { const o = val(), r = build(o, false); showPrev(A.map(), r.flatMap(x => x.bays.map(b => b.ring)));
+        const per = r.length ? r[0].bays.length : 0; pop.querySelector('p').textContent = r.length ? `${o.n} row${o.n > 1 ? 's' : ''} × ${per} bays = ${o.n * per} spaces, ${(r.length && (plan(o).rows.slice(-1)[0][1])).toFixed(1)} m deep. Dashed blue is the preview.` : 'The line is shorter than one bay.'; };
+      pop.addEventListener('input', preview);
+      pop.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const a = b.dataset.a;
+        if (a === 'x') return closePop();
+        if (a === 'flip') { ROWS.side *= -1; return preview(); }
+        if (a === 'undo') { const u = ROWS.undo.pop(); if (!u || !LVS) { hint('Nothing to undo.'); return; }
+          LVS.runs = LVS.runs.filter(r => !u.runs.includes(r)); LVS.out.rows = LVS.runs.map(r => r.ring); LVS.out.bays = LVS.runs.flatMap(r => r.bays); LVS.out.aisles = LVS.out.aisles.filter(l => !u.lanes.includes(l)); draw(LVS.map, LVS.out); hint('Last rows removed.'); return; }
+        if (a === 'add') { const o = val(), r = build(o, true); if (!r.length) { hint('Draw a longer line: it must be longer than one bay.'); return; }
+          const sp = r.reduce((t, x) => t + x.bays.length, 0); closePop(); hint(`${r.length} row${r.length > 1 ? 's' : ''} added, ${sp} spaces. Drag across bays to place stalls, use Cover whole car park, or press ＋ Rows again for more.`); } });
+      preview(); }
+    rowsBtn.addEventListener('click', () => { const map = A.map(); if (!map) return; if (ROWS.mode) { ROWS.mode = 0; map.getCanvas().style.cursor = ''; hint('Drawing rows cancelled.'); return; }
+      closePop(); ROWS.mode = 1; ROWS.side = 1; map.getCanvas().style.cursor = 'crosshair'; hint('Click where the first row starts, then where it ends (along the row). Esc to cancel.'); });
+    { const cc = () => A.map() && A.map().getCanvasContainer(); let down = null;
+      const onDown = e => { if (!ROWS.mode) return; down = [e.clientX, e.clientY]; };
+      const onClick = e => { const map = A.map(); if (!ROWS.mode || !map || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return; e.stopPropagation(); e.preventDefault();
+        const r = map.getCanvas().getBoundingClientRect(), ll = map.unproject([e.clientX - r.left, e.clientY - r.top]), px = toPx(ll.lng, ll.lat);
+        if (ROWS.mode === 1) { ROWS.p0 = px; ROWS.ll0 = [ll.lng, ll.lat]; ROWS.mode = 2; hint('Now click where the row ends.'); }
+        else { ROWS.p1 = px; ROWS.mode = 0; map.getCanvas().style.cursor = ''; openPop(); hint('Choose the rows, check the dashed preview, then Add rows. Other side flips which side of the line they go.'); } };
+      A.dlg.addEventListener('mousedown', e => { if (cc() && cc().contains(e.target)) onDown(e); }, true);
+      A.dlg.addEventListener('click', e => { if (cc() && cc().contains(e.target)) onClick(e); }, true);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && ROWS.mode) { ROWS.mode = 0; const m = A.map(); if (m) m.getCanvas().style.cursor = ''; hint('Drawing rows cancelled.'); } }); }
+
     async function detect(map, ctr, p, opt) {
       const G2 = window.TwinGeo, collect = !!(opt && opt.collect), hint = collect ? () => {} : A.hint;
       const mpp = 156543.034 * Math.cos(ctr[1] * Math.PI / 180) / 2 ** Z;            // metres per pixel
