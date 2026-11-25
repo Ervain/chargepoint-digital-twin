@@ -1871,6 +1871,18 @@ window.__twinAWM = { AWM, isOn: () => AWM.on(), groups: () => groups, cur: () =>
     box(0.5, CEIL, 0.6, S(0xe9e4d8, 0.85), cx, CEIL / 2, cz, E).castShadow = true;
     for (const y of [1.72, 2.02]) box(0.512, 0.14, 0.612, S(0x2c4f9c, 0.7), cx, y, cz, E);
     for (let i = 0; i < 6; i++) box(0.52, 0.12, 0.62, S(i % 2 ? 0x1b1b1b : 0xf2c200, 0.65), cx, 0.06 + i * 0.12, cz, E); }
+  // the wall logo (added by the mall module) sits between the two columns, centred on their light lines at 2.22 to 2.29 m (owner)
+  { let tries = 0; const lift = () => { let hit = null; for (const root of [AWM.env, groups.awm]) root && root.traverse(o => { const p = o.geometry && o.geometry.parameters;
+      if (!hit && o.isMesh && p && Math.abs(p.width - 1.4) < 0.01 && Math.abs(p.height - 0.35) < 0.01 && Math.abs(o.position.y - 2.04) < 0.02) hit = o; });
+    if (hit) { hit.position.y = 2.255; if (typeof draw === 'function') draw(); } else if (++tries < 60) setTimeout(lift, 500); };
+    setTimeout(lift, 500); }
+  // keep every car added with Add car standing on the basement floor: whatever height it was placed at, its tyres are brought down to the floor
+  { const v = new T.Vector3(), isCar = c => { if (c.userData.__car !== undefined) return c.userData.__car; let h = false; c.traverse(o => { if (o.name === 'Sketchfab_Scene') h = true; }); c.userData.__car = h; return h; };
+    setInterval(() => { const g = groups.awm; if (!g || !g.visible || !AWM.env) return; let moved = false; const fy = AWM.env.getWorldPosition(v).y;
+      AWM.env.children.forEach(c => { if (!c.visible || !isCar(c)) return; c.updateMatrixWorld(true); const b = new T.Box3();
+        c.traverse(o => { if (o.isMesh && o.visible && /wheel|tyre|tire/i.test(o.name)) b.expandByObject(o); }); if (b.isEmpty()) c.traverse(o => { if (o.isMesh && o.visible) b.expandByObject(o); }); if (b.isEmpty()) return;
+        const d = b.min.y - fy; if (Math.abs(d) > 0.03) { c.position.y -= d; moved = true; } });
+      if (moved && typeof draw === 'function') draw(); }, 600); }
   PL(80, 80, S(0x8f908f, 1), 0, CEIL, 30, Math.PI / 2);
   const galv = S(0xb4b8ba, 0.5, 0.6);
   box(1.5, 0.7, 30, galv, 5 * BW + 1.2, CEIL - 0.42, WALL + 15, E);                      // one duct run, kept clear of the bays
@@ -2939,7 +2951,7 @@ const scoreLots = (lots, raw) => TwinGeo.radar(lots, raw, { DEST_W, DEST_N });
 const RADAR = { markers: [] };
 const clearRadar = () => { RADAR.markers.forEach(m => m.remove()); RADAR.markers = []; $d('.tw-board').hidden = true; };
 async function runRadar() {
-if (!map) return; const rb = $d('.tw-radar');
+if (!map) { blocked(); return; } const rb = $d('.tw-radar');   // no map in this copy (outside connections are blocked here): say so and point to the live twin
 if (map.getZoom() < 14.2) { hint('Zoom in to a district first (a few streets across), then run Site Radar.'); return; }
 clearRadar(); $d('.tw-map-results').hidden = true; rb.disabled = true; hint('Site Radar is scanning this area…');
 const sw = $d('.tw-sweep'); sw.hidden = false; sw.classList.remove('is-on'); sw.classList.add('is-scan');
@@ -3657,14 +3669,14 @@ requestAnimationFrame(tick);
 })();
 </script>
 <link rel="stylesheet" href="maplibre-gl.css">
-<link rel="stylesheet" href="twin-site.css">
-<script src="twin-ui.js"></script>
-<script src="twin-energy.js"></script>
-<script src="twin-geo.js"></script>
-<script src="twin-lanes.js"></script>
-<script src="twin-reveal.js"></script>
-<script src="twin-cable.js"></script>
-<script src="twin-radar-ui.js"></script>
+<link rel="stylesheet" href="twin-site.css?v=20261125a">
+<script src="twin-ui.js?v=20261125a"></script>
+<script src="twin-energy.js?v=20261125a"></script>
+<script src="twin-geo.js?v=20261125a"></script>
+<script src="twin-lanes.js?v=20261125a"></script>
+<script src="twin-reveal.js?v=20261125a"></script>
+<script src="twin-cable.js?v=20261125a"></script>
+<script src="twin-radar-ui.js?v=20261125a"></script>
 
 
 </body></html>

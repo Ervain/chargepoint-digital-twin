@@ -123,4 +123,4 @@
 })();
 // the ruler lives in its own file next to this one
 (() => { const me = document.currentScript; ['twin-measure', 'twin-move', 'twin-awm'].forEach(n => { if (document.querySelector(`script[src*="${n}"]`)) return; const s = document.createElement('script');
-  s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, n + '.js'); document.head.appendChild(s); }); })();
+  s.src = (me && me.src ? me.src : 'twin-cable.js').replace(/twin-cable\.js(\?.*)?$/, (_, q) => n + '.js' + (q || '')); document.head.appendChild(s); }); })();   // the version query is passed on, so browsers fetch new copies
