@@ -43,6 +43,11 @@
           '0', 'LTYPE', '2', 'CONTINUOUS', '70', '0', '3', 'Solid line', '72', '65', '73', '0', '40', '0.0',
           '0', 'LTYPE', '2', 'DASHED', '70', '0', '3', '__ __ __ __', '72', '65', '73', '2', '40', '1.5', '49', '1.0', '49', '-0.5',
           '0', 'LTYPE', '2', 'CENTER', '70', '0', '3', '____ _ ____ _', '72', '65', '73', '4', '40', '3.0', '49', '2.0', '49', '-0.4', '49', '0.2', '49', '-0.4', '0', 'ENDTAB');
+        // the active viewport opens on the whole drawing (the site sits millions of metres from 0,0 on the UTM grid)
+        { const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2, vh = Math.max(1, (bb[3] - bb[1]) * 1.08), asp = Math.max(0.2, (bb[2] - bb[0]) * 1.08 / vh);
+          o.push('0', 'TABLE', '2', 'VPORT', '70', '1', '0', 'VPORT', '2', '*ACTIVE', '70', '0', '10', '0.0', '20', '0.0', '11', '1.0', '21', '1.0', '12', f(cx), '22', f(cy),
+            '13', '0.0', '23', '0.0', '14', '1.0', '24', '1.0', '15', '0.0', '25', '0.0', '16', '0.0', '26', '0.0', '36', '1.0', '17', '0.0', '27', '0.0', '37', '0.0',
+            '40', f(vh), '41', asp.toFixed(4), '42', '50.0', '43', '0.0', '44', '0.0', '50', '0.0', '51', '0.0', '71', '0', '72', '100', '73', '1', '74', '3', '75', '0', '76', '0', '77', '0', '78', '0', '0', 'ENDTAB'); }
         o.push('0', 'TABLE', '2', 'LAYER', '70', String(layers.length + 1), '0', 'LAYER', '2', '0', '70', '0', '62', '7', '6', 'CONTINUOUS');
         layers.forEach(([n, c, lt]) => o.push('0', 'LAYER', '2', n, '70', '0', '62', String(c), '6', lt || 'CONTINUOUS'));
         o.push('0', 'ENDTAB', '0', 'TABLE', '2', 'STYLE', '70', '1', '0', 'STYLE', '2', 'STANDARD', '70', '0', '40', '0.0', '41', '1.0', '50', '0.0', '71', '0', '42', '1.0', '3', 'txt', '4', '', '0', 'ENDTAB', '0', 'ENDSEC');
@@ -113,7 +118,7 @@
     // title block and charger schedule, to the right of the site
     let cabY = null; const nAC = ev.filter(b => b.ev !== 'dc').length, nDC = ev.length - nAC, cableTot = cables.reduce((s, r) => s + r.len, 0);
     const slug = (S.slug || (x => 'site'))((p && p.name) || S.name || 'site'), drawNo = `CP-SP-${slug.toUpperCase().slice(0, 24)}-001`, today = new Date().toISOString().slice(0, 10);
-    const tb = h * Math.max(1, Math.min(3, Math.max(W, Hs) / (46 * h * 3))), TW = tb * 46, x0 = site[2] + h * 8, top = site[3], lh = tb * 1.9, Lx = x0 + h, cell = (y, a, b) => { D.text([Lx, y], a, 'CP-TITLE', tb * 0.7); D.text([Lx + tb * 14, y], b, 'CP-TITLE', tb * 0.9); };
+    const tb = h * Math.max(1, Math.min(3, Math.max(W, Hs) / (46 * h * 3))), TW = tb * 58, x0 = site[2] + h * 8, top = site[3], lh = tb * 1.9, Lx = x0 + h, cell = (y, a, b) => { D.text([Lx, y], a, 'CP-TITLE', tb * 0.7); D.text([Lx + tb * 14, y], b, 'CP-TITLE', tb * 0.9); };
     const fields = [['SITE', (p && p.name) || S.name || 'Chosen site'], ['LOCATION', ((p && p.full) || S.place || '').slice(0, 60) || 'TBD'],
       ['WGS 84', `${refLL[1].toFixed(6)} N, ${refLL[0].toFixed(6)} E`], ['GRID', `WGS 84 / UTM zone ${zone}${hemi} (EPSG:${epsg}), metres`],
       ['BAYS', `${all.length} parking bays in ${rows.length} rows`], ['CHARGING', `${ev.length} stalls: ${nAC} AC, ${nDC} DC`],
