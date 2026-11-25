@@ -54,6 +54,50 @@
       for (const y of [1.72, 2.02]) { const b = new T.Mesh(new T.BoxGeometry(0.512, 0.14, 0.612), bandM); b.position.set(x, y, z); G.add(b); }
       for (let i = 0; i < 6; i++) { const s = new T.Mesh(new T.BoxGeometry(0.52, 0.12, 0.62), i % 2 ? blackM : guardM); s.position.set(x, 0.06 + i * 0.12, z); G.add(s); } }
 
+    // ---- 4b. the double service door after the fourth bay, past the column (from the owner's site photo): off-white steel leaves in a steel frame,
+    //      a closer on each leaf, a lever on the right leaf, light under the door, a steel ramp plate and a yellow threshold line in front,
+    //      the car park's blue bands and a black rubber corner guard beside it. "Open door" swings both leaves wide, out into the car park ----
+    const DOOR = { open: 0, target: 0, leaves: [] };
+    { const DW = 1.8, DH = 2.2, DX = 3 * BW + 0.95 + 0.25 + 0.4 + DW / 2, ZW = WALL + 0.004;
+      const leafM = new T.MeshStandardMaterial(Object.assign({ color: 0xe8e5dc, roughness: 0.75, metalness: 0.08, normalScale: new T.Vector2(0.25, 0.25) }, PH('wall', 0.4, 0.9)));
+      const frameM = new T.MeshStandardMaterial({ color: 0xd9d6cc, roughness: 0.6, metalness: 0.15 }), darkM = new T.MeshStandardMaterial({ color: 0x3a3b3d, roughness: 0.5, metalness: 0.6 });
+      const steelM = new T.MeshStandardMaterial({ color: 0xb9bcbf, roughness: 0.35, metalness: 0.9 });
+      const bx = (w, h, d, m, x, y, z, par) => { const o = new T.Mesh(new T.BoxGeometry(w, h, d), m); o.position.set(x, y, z); o.castShadow = o.receiveShadow = true; (par || G).add(o); return o; };
+      // the opening: a dim service corridor behind, lit from deep inside, seen when the leaves swing open
+      const back = new T.Mesh(new T.PlaneGeometry(DW, DH), new T.MeshBasicMaterial({ map: canvasTex(256, 320, (c, w, h) => { const g = c.createRadialGradient(w / 2, h * 0.45, 4, w / 2, h * 0.5, w * 0.9);
+          g.addColorStop(0, '#d8d4c8'); g.addColorStop(0.35, '#8a8780'); g.addColorStop(1, '#2a2927'); c.fillStyle = g; c.fillRect(0, 0, w, h);
+          c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(0, h * 0.86, w, h * 0.14); }, null, true) }));
+      back.position.set(DX, DH / 2, ZW - 0.001); G.add(back);
+      // frame: two jambs and a head
+      bx(0.07, DH + 0.07, 0.09, frameM, DX - DW / 2 - 0.035, (DH + 0.07) / 2, ZW + 0.03); bx(0.07, DH + 0.07, 0.09, frameM, DX + DW / 2 + 0.035, (DH + 0.07) / 2, ZW + 0.03);
+      bx(DW + 0.14, 0.07, 0.09, frameM, DX, DH + 0.035, ZW + 0.03);
+      // the two leaves, each hung on its outer jamb
+      const sign = canvasTex(512, 256, (c, w, h) => { c.fillStyle = '#f4f2ea'; c.fillRect(0, 0, w, h); c.strokeStyle = '#b7932f'; c.lineWidth = 10; c.strokeRect(5, 5, w - 10, h - 10);
+        c.fillStyle = '#7a5a12'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = '600 64px "Helvetica Neue",Helvetica,Arial,sans-serif'; c.fillText('مخرج طوارئ', w / 2, 82);
+        c.font = '600 56px "Helvetica Neue",Helvetica,Arial,sans-serif'; c.fillText('EMERGENCY EXIT', w / 2, 178); }, null, true);
+      [-1, 1].forEach(sd => { const piv = new T.Group(); piv.position.set(DX + sd * DW / 2, 0, ZW + 0.03); G.add(piv);
+        const LW = DW / 2 - 0.006, lx = -sd * LW / 2;   // the leaf runs from its hinge in to the meeting stile
+        bx(LW, DH - 0.012, 0.045, leafM, lx, DH / 2 + 0.006, 0, piv);
+        bx(0.012, DH - 0.03, 0.05, darkM, -sd * (LW - 0.006), DH / 2 + 0.006, 0.001, piv);                     // the shadow line where the leaves meet
+        bx(0.3, 0.055, 0.06, darkM, -sd * 0.26, DH - 0.06, 0.05, piv); bx(0.26, 0.018, 0.025, darkM, -sd * 0.38, DH - 0.03, 0.09, piv);   // overhead closer and its arm
+        if (sd > 0) { bx(0.05, 0.05, 0.05, steelM, -LW + 0.09, 1.02, 0.045, piv); bx(0.13, 0.022, 0.022, steelM, -LW + 0.13, 1.02, 0.075, piv);   // lever handle
+          bx(0.03, 0.05, 0.012, steelM, -LW + 0.09, 0.92, 0.028, piv); }
+        else { const sg = new T.Mesh(new T.PlaneGeometry(0.26, 0.13), new T.MeshStandardMaterial({ map: sign, roughness: 0.4 })); sg.position.set(LW / 2, 1.58, 0.024); piv.add(sg); }
+        DOOR.leaves.push({ piv, sd }); });
+      // light spilling under the door, the threshold strip, a steel ramp plate and the yellow line on the floor
+      const spill = new T.Mesh(new T.PlaneGeometry(DW, 0.5), new T.MeshBasicMaterial({ map: canvasTex(16, 128, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(255,244,214,.55)'); g.addColorStop(1, 'rgba(255,244,214,0)'); c.fillStyle = g; c.fillRect(0, 0, w, h); }, null, true), transparent: true, depthWrite: false }));
+      spill.rotation.x = -Math.PI / 2; spill.position.set(DX, 0.006, ZW + 0.3); G.add(spill);
+      bx(DW + 0.1, 0.012, 0.12, steelM, DX, 0.006, ZW + 0.07);
+      const ramp = bx(DW - 0.1, 0.025, 1.0, new T.MeshStandardMaterial({ color: 0x55585b, roughness: 0.55, metalness: 0.7 }), DX - 0.05, 0.03, ZW + 0.68); ramp.rotation.x = 0.04;
+      const yl = new T.Mesh(new T.PlaneGeometry(1.1, 0.14), new T.MeshStandardMaterial({ color: 0xe8c21a, roughness: 0.7 })); yl.rotation.x = -Math.PI / 2; yl.position.set(DX - DW / 2 - 0.65, 0.004, ZW + 0.5); G.add(yl);
+      // blue bands and a black rubber corner guard beside the door, as in the photo
+      for (const y of [1.72, 2.02]) { const b = new T.Mesh(new T.PlaneGeometry(1.2, 0.14), bandM); b.position.set(DX + DW / 2 + 0.75, y, ZW + 0.002); G.add(b); }
+      bx(0.09, 1.25, 0.09, blackM, DX + DW / 2 + 1.45, 0.65, ZW + 0.05);
+      for (let i = 0; i < 3; i++) bx(0.092, 0.06, 0.092, guardM, DX + DW / 2 + 1.45, 0.3 + i * 0.4, ZW + 0.05); }
+    const swing = () => { const d = DOOR.target - DOOR.open; DOOR.open = Math.abs(d) < 0.01 ? DOOR.target : DOOR.open + d * 0.14;
+      DOOR.leaves.forEach(({ piv, sd }) => { piv.rotation.y = sd * DOOR.open * (100 * Math.PI / 180); }); A.draw(); if (DOOR.open !== DOOR.target) requestAnimationFrame(swing); };
+    const toggleDoor = () => { DOOR.target = DOOR.target ? 0 : 1; swing(); return DOOR.target; };
+
     // ---- 5. neighbouring bays (ordinary parking) either side, so the charging bays sit in a real row ----
     const lineM = new T.MeshStandardMaterial({ color: 0xe9e9e4, roughness: 0.6 });
     const xs = [-3 * BW / 2 - 0.65, -5 * BW / 2 - 0.65, 3 * BW / 2 + 0.65, 5 * BW / 2 + 0.65];   // bay centres beside the columns
@@ -154,8 +198,8 @@
 .tw-awm-cars button{appearance:none;border:0;border-radius:999px;padding:9px 14px;font:600 13px var(--display,Helvetica);cursor:pointer;background:rgba(255,255,255,.92);color:#1d1d1f;box-shadow:0 4px 16px rgba(0,0,0,.18)}
 .tw-awm-cars button:first-child{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-awm-cars .tw-awm-night{background:#1d1d1f;color:#fff}`; document.head.appendChild(st);
     const bar = document.createElement('div'); bar.className = 'tw-awm-cars'; bar.hidden = true;
-    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button><button type="button" class="tw-awm-night" title="See the basement at night, lit only by its own fittings">🌙 Night</button><button type="button" class="tw-awm-prop" title="Make the ChargePoint proposal for this project, with 4K renders from this scene">📄 Create proposal</button>';
-    document.body.appendChild(bar); const [bAdd, bClr, bNight] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars); bNight.addEventListener('click', () => setNight(!NIGHT.on)); bar.querySelector('.tw-awm-prop').addEventListener('click', openProposal);
+    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button><button type="button" class="tw-awm-night" title="See the basement at night, lit only by its own fittings">🌙 Night</button><button type="button" class="tw-awm-door" title="Swing the two leaves of the service door wide open, or close them">🚪 Open door</button><button type="button" class="tw-awm-prop" title="Make the ChargePoint proposal for this project, with 4K renders from this scene">📄 Create proposal</button>';
+    document.body.appendChild(bar); const [bAdd, bClr, bNight] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars); bNight.addEventListener('click', () => setNight(!NIGHT.on)); bar.querySelector('.tw-awm-prop').addEventListener('click', openProposal); { const bd = bar.querySelector('.tw-awm-door'); bd.addEventListener('click', () => { bd.textContent = toggleDoor() ? '🚪 Close door' : '🚪 Open door'; }); }
     setInterval(() => { const on = H.isOn() && !S.on; if (bar.hidden === on) bar.hidden = !on; }, 500);
     A.draw(); };
   if (window.__twin && window.__twin.api) start(); else document.addEventListener('twin-ready', start, { once: true });
