@@ -193,6 +193,20 @@
     function openProposal() { if (!window.__twinProposalOpen || !S.render4k) { A.say('The proposal maker is still loading. Try again in a moment.'); return; }
       PJ.active = true; window.__twinProposalOpen({ location: 'Al Wahda Mall, Abu Dhabi', site_type: 'retail', indoor_outdoor: 'indoor', utility_approval: 'TAQA', grid_connection: 'TBD', civil_work: 'TBD' }); }
 
+    // ---- cutaway: when the camera rises above the ceiling, the slab, beams, duct and light fittings hide so the view looks down
+    //      into the bays instead of into the concrete; they come back as soon as the camera drops below the ceiling again ----
+    { const CUT = { on: false, list: [], key: '' }, box = new T.Box3(), cam = new T.Vector3(), fyV = new T.Vector3();
+      const isCar = o => { for (let p = o; p && p !== E; p = p.parent) if (p.children && p.children[0] && p.children[0].name === 'Sketchfab_Scene') return true; return false; };
+      const collect = fy => { const out = []; E.updateMatrixWorld(true);
+        const wz = E.getWorldPosition(new T.Vector3()).z + WALL;   // the back wall's line: the logo and slogan on it stay
+        E.traverse(o => { if (!o.isMesh || isCar(o)) return; box.setFromObject(o); if (box.isEmpty()) return; const mn = box.min.y - fy;
+          if (mn > 2.5 || (mn > 2.0 && box.min.z > wz + 1)) out.push(o); }); return out; };   // the slab, beams, duct and fittings, and the sign hanging over the aisle
+      const check = () => { const on = H.isOn(); E.getWorldPosition(fyV); const fy = fyV.y;
+        const key = E.children.length + ':' + G.children.length; if (on && key !== CUT.key) { if (CUT.on) CUT.list.forEach(o => { o.visible = true; }); CUT.on = false; CUT.list = collect(fy); CUT.key = key; }
+        A.camera.getWorldPosition(cam); const want = on && cam.y - fy > 2.5;   // from the beams' underside up: a camera among the beams sees only concrete
+        if (want !== CUT.on) { CUT.on = want; CUT.list.forEach(o => { o.visible = !want; }); A.draw(); } };
+      A.controls.addEventListener('change', check); setInterval(check, 300); H.cutaway = () => CUT.on; }
+
     // ---- the two buttons, shown on the Al Wahda Mall project only ----
     const st = document.createElement('style'); st.textContent = `.tw-awm-cars{position:fixed;left:20px;bottom:118px;z-index:20;display:flex;gap:8px}.tw-awm-cars[hidden]{display:none}
 .tw-awm-cars button{appearance:none;border:0;border-radius:999px;padding:9px 14px;font:600 13px var(--display,Helvetica);cursor:pointer;background:rgba(255,255,255,.92);color:#1d1d1f;box-shadow:0 4px 16px rgba(0,0,0,.18)}
