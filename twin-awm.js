@@ -193,6 +193,99 @@
     function openProposal() { if (!window.__twinProposalOpen || !S.render4k) { A.say('The proposal maker is still loading. Try again in a moment.'); return; }
       PJ.active = true; window.__twinProposalOpen({ location: 'Al Wahda Mall, Abu Dhabi', site_type: 'retail', indoor_outdoor: 'indoor', utility_approval: 'TAQA', grid_connection: 'TBD', civil_work: 'TBD' }); }
 
+    // ---- 8. cinematic: the look of a car-advert still, live. A cool, dim car park; three warm downlights washing the charging wall;
+    //      a polished floor that reflects the car and the lights; bloom on everything that glows; a teal-and-amber grade with a vignette;
+    //      a car in bay 01 with its headlights on and the cable plugged in. Effects come from three.js r147 add-ons, loaded on first use ----
+    const CINE = { on: false, ready: null, spots: [], fx: null, refl: null, car: null, cable: null, heads: [], wasNight: false, floorR: null };
+    const CDN = 'https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/';
+    const addScript = src => new Promise((res, rej) => { if ([...document.scripts].some(s => s.src === src)) return res(); const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+    const loadFx = () => CINE.ready || (CINE.ready = ['shaders/CopyShader.js', 'shaders/LuminosityHighPassShader.js', 'postprocessing/EffectComposer.js', 'postprocessing/MaskPass.js', 'postprocessing/RenderPass.js',
+      'postprocessing/ShaderPass.js', 'postprocessing/UnrealBloomPass.js', 'objects/Reflector.js'].reduce((p, f) => p.then(() => addScript(CDN + f)), Promise.resolve()));
+    // final pass: ACES tone mapping (as the renderer does), then the grade (teal in the shadows, amber in the highlights, a touch of contrast),
+    // vignette and fine grain, then sRGB. The scene is rendered to half-float targets so the bloom sees real highlight values
+    const GRADE = { uniforms: { tDiffuse: { value: null }, exposure: { value: 1 }, time: { value: 0 }, aspect: { value: 1.6 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float exposure, time, aspect; varying vec2 vUv;
+        vec3 RRT(vec3 v){ vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }
+        vec3 aces(vec3 c){ const mat3 I = mat3(vec3(0.59719,0.07600,0.02840), vec3(0.35458,0.90834,0.13383), vec3(0.04823,0.01566,0.83777));
+          const mat3 O = mat3(vec3(1.60475,-0.10208,-0.00327), vec3(-0.53108,1.10813,-0.07276), vec3(-0.07367,-0.00605,1.07602)); c *= exposure / 0.6; return clamp(O * RRT(I * c), 0.0, 1.0); }
+        float rnd(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)) + time) * 43758.5453); }
+        void main(){ vec3 c = aces(texture2D(tDiffuse, vUv).rgb);
+          float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+          c = mix(c * vec3(0.86, 1.0, 1.08), c, smoothstep(0.0, 0.45, l));               // teal shadows
+          c *= mix(vec3(1.0), vec3(1.07, 1.0, 0.9), smoothstep(0.45, 1.0, l));         // amber highlights
+          c = clamp((c - 0.5) * 1.08 + 0.5, 0.0, 1.0);                                  // gentle contrast
+          vec2 d = (vUv - 0.5) * vec2(aspect, 1.0); c *= mix(1.0, 0.55, smoothstep(0.35, 1.05, length(d)));   // vignette
+          c += (rnd(vUv * 731.0) - 0.5) * 0.018;                                         // fine grain
+          c = mix(c * 12.92, 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));   // linear to sRGB
+          gl_FragColor = vec4(c, 1.0); }` };
+    const R = A.renderer, rawRender = R.render.bind(R); let inFx = false;
+    R.render = (sc, cam) => { if (!CINE.on || !CINE.fx || inFx || R.getRenderTarget() !== null || sc !== A.scene || cam !== A.camera) return rawRender(sc, cam);
+      const s = R.getSize(new T.Vector2()), f = CINE.fx, pr = R.getPixelRatio();
+      if (f.w !== s.x || f.h !== s.y || f.pr !== pr) { f.comp.setPixelRatio(pr); f.comp.setSize(s.x, s.y); f.bloom.setSize(s.x * pr, s.y * pr); f.w = s.x; f.h = s.y; f.pr = pr; f.grade.uniforms.aspect.value = s.x / s.y; }
+      f.grade.uniforms.time.value = (performance.now() % 1000) / 1000; f.grade.uniforms.exposure.value = 0.84;
+      inFx = true; try { f.comp.render(); } finally { inFx = false; } };
+    const buildFx = () => { if (CINE.fx) return; const s = R.getSize(new T.Vector2()), pr = R.getPixelRatio();
+      const rt = new T.WebGLRenderTarget(s.x * pr, s.y * pr, { type: T.HalfFloatType });
+      const comp = new T.EffectComposer(R, rt); comp.setPixelRatio(pr); comp.setSize(s.x, s.y);
+      comp.addPass(new T.RenderPass(A.scene, A.camera));
+      const bloom = new T.UnrealBloomPass(new T.Vector2(s.x * pr, s.y * pr), 0.55, 0.55, 0.9); comp.addPass(bloom);
+      const grade = new T.ShaderPass(GRADE); comp.addPass(grade);
+      CINE.fx = { comp, bloom, grade, w: s.x, h: s.y, pr }; };
+    // polished floor: a mirror rendered from below, added on top of the slab at a third of its strength, so markings still read
+    const buildRefl = () => { if (CINE.refl) return; const r = new T.Reflector(new T.PlaneGeometry(34, 22), { textureWidth: 1024, textureHeight: 1024, clipBias: 0.003, color: 0xffffff, multisample: 0 });
+      r.material.fragmentShader = r.material.fragmentShader.replace('gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );', 'gl_FragColor = vec4( base.rgb * 0.32, 1.0 );');
+      r.material.blending = T.AdditiveBlending; r.material.transparent = true; r.material.depthWrite = false; r.material.needsUpdate = true;
+      r.rotation.x = -Math.PI / 2; r.position.set(4, 0.006, 8); r.renderOrder = 1; r.visible = false; E.add(r); CINE.refl = r; };
+    // three warm wall-washers just in front of the charging wall, and their round fittings in the soffit
+    const buildSpots = () => { if (CINE.spots.length) return; const fit = new T.MeshBasicMaterial({ color: 0xfff1d6, toneMapped: false }); fit.color.setScalar(3);
+      [-1.75, 0, 1.75].forEach((x, i) => { const L = new T.SpotLight(0xffd3a1, 0, 7.5, 0.6, 0.85, 1.6); L.position.set(x, CEIL - 0.08, WALL + 0.45); L.target.position.set(x, 0.6, WALL + 0.05);
+        if (i === 1) { L.castShadow = true; L.shadow.mapSize.set(1024, 1024); L.shadow.bias = -0.0005; } G.add(L); G.add(L.target);
+        const disc = new T.Mesh(new T.CircleGeometry(0.07, 24), fit); disc.rotation.x = Math.PI / 2; disc.position.set(x, CEIL - 0.012, WALL + 0.45); disc.visible = false; G.add(disc); CINE.spots.push({ L, disc }); }); };
+    // the car in bay 01, plugged in: a black cable from charger 01's holster down and across to the charge port at the car's rear left,
+    // and its headlights on (two cool spotlights and a glow on the lamps)
+    const plugCar = () => { if (!cars.length) addCar(); const c = cars[0]; if (!c || CINE.car === c) return; CINE.car = c;
+      if (CINE.cable) { E.remove(CINE.cable); CINE.cable = null; } CINE.heads.forEach(h => h.parent && h.parent.remove(h)); CINE.heads = [];
+      const o0 = E.getWorldPosition(new T.Vector3()), b = boxOf(c, /body_primary/).translate(o0.clone().negate());
+      const port = new T.Vector3(b.max.x - 0.12, 0.82, b.min.z + 0.2), hol = new T.Vector3(-BW / 2 + 0.12, 1.02, WALL + 0.16);
+      const curve = new T.CatmullRomCurve3([hol, new T.Vector3(hol.x + 0.05, 0.55, WALL + 0.28), new T.Vector3((hol.x + port.x) / 2, 0.12, (hol.z + port.z) / 2 + 0.15), new T.Vector3(port.x + 0.12, 0.45, port.z - 0.05), port]);
+      const cab = new T.Mesh(new T.TubeGeometry(curve, 80, 0.014, 10, false), new T.MeshStandardMaterial({ color: 0x0e0f10, roughness: 0.45, metalness: 0.1 })); cab.castShadow = true; E.add(cab); CINE.cable = cab;
+      const plug = new T.Mesh(new T.CylinderGeometry(0.03, 0.035, 0.12, 16), new T.MeshStandardMaterial({ color: 0x151617, roughness: 0.4 })); plug.position.copy(port).add(new T.Vector3(0.05, 0, 0)); plug.rotation.z = Math.PI / 2; cab.add(plug.clone()); E.add(plug); CINE.heads.push(plug);
+      const front = b.max.z, hy = 0.66; [b.min.x + 0.32, b.max.x - 0.32].forEach(x => { const H = new T.SpotLight(0xdfefff, 0, 9, 0.5, 0.7, 1.4); H.position.set(x, hy, front - 0.08); H.target.position.set(x, 0, front + 5); E.add(H); E.add(H.target); CINE.heads.push(H, H.target);
+        const g = new T.Mesh(new T.PlaneGeometry(0.22, 0.05), new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })); g.material.color.setScalar(4); g.position.set(x, hy + 0.02, front + 0.005); E.add(g); CINE.heads.push(g); }); };
+    // reflections stay on (car paint and chrome need them), but the walls and floor take only a little of them, so the room stays dark
+    const envKeep = new Map(), isCarPart = o => { for (let p = o; p && p !== E; p = p.parent) if (cars.includes(p)) return true; return false; };
+    const setEnvLevels = on => { const roots = [E, H.groups().awm].filter(Boolean);
+      roots.forEach(r => r.traverse(o => { if (!o.isMesh || !o.material) return; (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (!('envMapIntensity' in m)) return;
+        if (on) { if (!envKeep.has(m)) envKeep.set(m, m.envMapIntensity); m.envMapIntensity = isCarPart(o) ? 1.0 : 0.15; } else if (envKeep.has(m)) m.envMapIntensity = envKeep.get(m); }); }));
+      if (!on) envKeep.clear(); };
+    const applyCine = () => { if (!CINE.on || !H.isOn()) return; const sun = A.sun;
+      if (sun) sun.intensity = 0.03; if (hemi) { hemi.intensity = 0.12; hemi.color.setHex(0x7fa6c4); hemi.groundColor && hemi.groundColor.setHex(0x1a1c1f); }
+      if (!A.scene.environment && CINE.env) A.scene.environment = CINE.env;
+      if (A.scene.background && A.scene.background.isColor) A.scene.background.setHex(0x07090b); if (A.scene.fog) A.scene.fog.color.setHex(0x07090b);
+      CINE.spots.forEach(({ L, disc }) => { L.intensity = 11; disc.visible = true; }); CINE.heads.forEach(h => { if (h.isSpotLight) h.intensity = 4; });
+      NL.forEach(L => { L.color.setHex(0xa9d4ff); L.intensity = 0.8; }); AWM.lights.forEach(L => { L.intensity = L.userData.on * 0.5; });
+      const fw = find(plane(2 * BW + 0.5, CEIL)); if (fw && fw.material.color.r < 5) { fw.material.color.setScalar(7); fw.material.emissiveIntensity = 0.35; }   // the black wall reads as charcoal under the warm light tubeM.color.setScalar(2.6);
+      if (CINE.refl) CINE.refl.visible = true; if (floor && floor.material.roughness !== 0.5) { floor.material.roughness = 0.5; floor.material.needsUpdate = true; } };
+    async function setCine(on, bBtn) {
+      if (on) { bBtn.disabled = true; bBtn.textContent = '🎬 Loading…';
+        try { await loadFx(); } catch (e) { bBtn.disabled = false; bBtn.textContent = '🎬 Cinematic'; A.say('The cinematic effects could not load. Check the internet connection and try again.'); return; }
+        CINE.wasNight = NIGHT.on; if (NIGHT.on) setNight(false);
+        const sun = A.sun; CINE.keep = { sun: sun ? sun.intensity : null, hemi: hemi ? hemi.intensity : null, hc: hemi ? hemi.color.getHex() : null, hg: hemi && hemi.groundColor ? hemi.groundColor.getHex() : null,
+          bg: A.scene.background && A.scene.background.isColor ? A.scene.background.getHex() : null, fog: A.scene.fog ? A.scene.fog.color.getHex() : null };
+        CINE.env = A.scene.environment || CINE.env;
+        buildFx(); buildRefl(); buildSpots(); plugCar(); CINE.on = true; setEnvLevels(true); applyCine();
+        const v = (x, y, z) => new T.Vector3(x, y, z).add(E.getWorldPosition(new T.Vector3()));   // frame it like an advert still: low, three-quarter, car in front
+        A.controls.target.copy(v(1.9, 1.1, -0.75)); A.camera.position.copy(v(-7.0, 1.25, 9.35)); A.camera.fov = 35; A.camera.updateProjectionMatrix(); A.controls.update();
+        bBtn.disabled = false; bBtn.textContent = '🎬 Standard'; A.draw(); A.say('Cinematic: warm wall-washers, a polished floor, glow and a film grade. Drag to look around; Shot 8K saves it.'); return; }
+      CINE.on = false; setEnvLevels(false); CINE.spots.forEach(({ L, disc }) => { L.intensity = 0; disc.visible = false; }); CINE.heads.forEach(h => { if (h.isSpotLight) h.intensity = 0; });
+      NL.forEach(L => { L.color.setHex(0xf4f8ff); L.intensity = 0; }); AWM.lights.forEach(L => { L.intensity = L.userData.on; }); tubeM.color.setScalar(1.6); if (CINE.refl) CINE.refl.visible = false;
+      const k = CINE.keep || {}, sun = A.sun; if (sun && k.sun !== null) sun.intensity = k.sun; if (hemi && k.hemi !== null) { hemi.intensity = k.hemi; hemi.color.setHex(k.hc); if (k.hg !== null && hemi.groundColor) hemi.groundColor.setHex(k.hg); }
+      if (k.bg !== null && A.scene.background && A.scene.background.isColor) A.scene.background.setHex(k.bg); if (k.fog !== null && A.scene.fog) A.scene.fog.color.setHex(k.fog);
+      if (floor) { floor.material.roughness = 1; floor.material.needsUpdate = true; } { const fw = find(plane(2 * BW + 0.5, CEIL)); if (fw) { fw.material.color.setScalar(1); fw.material.emissiveIntensity = 0.55; } } if (CINE.wasNight) setNight(true);
+      bBtn.textContent = '🎬 Cinematic'; A.draw(); A.say('Standard view.'); }
+    setInterval(() => { if (!CINE.on) return; if (!H.isOn()) { const b = document.querySelector('.tw-awm-cine'); if (b) setCine(false, b); return; } applyCine(); A.draw(); }, 700);
+
     // ---- cutaway: when the camera rises above the ceiling, the slab, beams, duct and light fittings hide so the view looks down
     //      into the bays instead of into the concrete; they come back as soon as the camera drops below the ceiling again ----
     { const CUT = { on: false, list: [], key: '' }, box = new T.Box3(), cam = new T.Vector3(), fyV = new T.Vector3();
@@ -210,10 +303,10 @@
     // ---- the two buttons, shown on the Al Wahda Mall project only ----
     const st = document.createElement('style'); st.textContent = `.tw-awm-cars{position:fixed;left:20px;bottom:118px;z-index:20;display:flex;gap:8px}.tw-awm-cars[hidden]{display:none}
 .tw-awm-cars button{appearance:none;border:0;border-radius:999px;padding:9px 14px;font:600 13px var(--display,Helvetica);cursor:pointer;background:rgba(255,255,255,.92);color:#1d1d1f;box-shadow:0 4px 16px rgba(0,0,0,.18)}
-.tw-awm-cars button:first-child{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-awm-cars .tw-awm-night{background:#1d1d1f;color:#fff}`; document.head.appendChild(st);
+.tw-awm-cars button:first-child{background:linear-gradient(135deg,#3BA9E0,#8DC63F);color:#fff}.tw-awm-cars .tw-awm-night{background:#1d1d1f;color:#fff}.tw-awm-cars .tw-awm-cine{background:linear-gradient(135deg,#2b2117,#4a3420);color:#ffd9a3}`; document.head.appendChild(st);
     const bar = document.createElement('div'); bar.className = 'tw-awm-cars'; bar.hidden = true;
-    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button><button type="button" class="tw-awm-night" title="See the basement at night, lit only by its own fittings">🌙 Night</button><button type="button" class="tw-awm-door" title="Swing the two leaves of the service door wide open, or close them">🚪 Open door</button><button type="button" class="tw-awm-prop" title="Make the ChargePoint proposal for this project, with 4K renders from this scene">📄 Create proposal</button>';
-    document.body.appendChild(bar); const [bAdd, bClr, bNight] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars); bNight.addEventListener('click', () => setNight(!NIGHT.on)); bar.querySelector('.tw-awm-prop').addEventListener('click', openProposal); { const bd = bar.querySelector('.tw-awm-door'); bd.addEventListener('click', () => { bd.textContent = toggleDoor() ? '🚪 Close door' : '🚪 Open door'; }); }
+    bar.innerHTML = '<button type="button" title="Park a car in the next free bay: the charging bays first">🚗 Add car</button><button type="button" title="Remove the cars you added">Clear cars</button><button type="button" class="tw-awm-night" title="See the basement at night, lit only by its own fittings">🌙 Night</button><button type="button" class="tw-awm-cine" title="Cinematic look: warm wall-washers, a polished floor, glow and a film grade, with a car plugged into bay 01">🎬 Cinematic</button><button type="button" class="tw-awm-door" title="Swing the two leaves of the service door wide open, or close them">🚪 Open door</button><button type="button" class="tw-awm-prop" title="Make the ChargePoint proposal for this project, with 4K renders from this scene">📄 Create proposal</button>';
+    document.body.appendChild(bar); const [bAdd, bClr, bNight] = bar.querySelectorAll('button'); bAdd.addEventListener('click', addCar); bClr.addEventListener('click', clearCars); bNight.addEventListener('click', () => setNight(!NIGHT.on)); bar.querySelector('.tw-awm-prop').addEventListener('click', openProposal); { const bc = bar.querySelector('.tw-awm-cine'); bc.addEventListener('click', () => setCine(!CINE.on, bc)); } { const bd = bar.querySelector('.tw-awm-door'); bd.addEventListener('click', () => { bd.textContent = toggleDoor() ? '🚪 Close door' : '🚪 Open door'; }); }
     setInterval(() => { const on = H.isOn() && !S.on; if (bar.hidden === on) bar.hidden = !on; }, 500);
     A.draw(); };
   if (window.__twin && window.__twin.api) start(); else document.addEventListener('twin-ready', start, { once: true });
