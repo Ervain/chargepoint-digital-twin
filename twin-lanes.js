@@ -790,7 +790,7 @@
     function cloneUnit(src) { const keep = []; src.traverse(o => { keep.push(o.userData); o.userData = {}; });
       let c; try { c = src.clone(true); } finally { let i = 0; src.traverse(o => { o.userData = keep[i++]; }); }
       let j = 0; const srcs = []; src.traverse(o => srcs.push(o)); c.traverse(o => { o.userData = srcs[j++].userData; }); return c; }
-    const pathOf = (root, o) => { const P = []; while (o && o !== root) { P.unshift(o.parent.children.indexOf(o)); o = o.parent; } return o === root ? P : null; };
+    const pathOf = (root, o) => { const P = []; while (o && o !== root) { if (!o.parent) return null; P.unshift(o.parent.children.indexOf(o)); o = o.parent; } return o === root ? P : null; };   // null for a part outside the template unit
     const atPath = (root, P) => P.reduce((o, i) => o && o.children[i], root);
     function applyCover() { const P = S.product; if (!COVER || !COVER.on || !P || !P.children.length) return; const T = A.T;
       const tpl = P.children[0], key = (S.list && S.list[0]) || 'main';
@@ -835,11 +835,19 @@
       // title card and camera
       const li = document.querySelectorAll('#tw-stats li b'); if (li.length >= 3) { const unit = (li[1].textContent.split('× ')[1] || 'canopy').split(' +')[0];
         li[0].textContent = String(S.spots); li[1].textContent = `${plan.length} × ${unit}`; li[2].textContent = `${(S.spots * 45).toLocaleString('en-US')} kWh`; }
+      if (COVER.quiet) { A.draw(); return; }   // re-laid after an option change: keep the camera where the viewer has it
       const all = A.boxOf(P), c0 = all.getCenter(new T.Vector3()), s3 = all.getSize(new T.Vector3()), rr = Math.max(s3.x, s3.z) * 0.5 + 10;
       A.controls.dispatchEvent({ type: 'start' }); A.controls.target.copy(c0); A.camera.position.copy(c0).add(new T.Vector3(0.6, 0.75, 0.9).normalize().multiplyScalar(rr * 2.1)); A.controls.update(); A.draw();
       const msg = `Whole car park covered: ${plan.length} canopies over ${S.spots} bays along ${COVER.runs.length} rows, all inside the parking rows.${skipped ? ` ${skipped} spot${skipped > 1 ? 's were' : ' was'} left out where a row is shorter than a canopy or two canopies would touch.` : ''} Turn rotates each canopy in place.`;
       [300, 9000].forEach(t => setTimeout(() => { if (COVER && COVER.on && S.on) A.say(msg); }, t));
     }
+    // every canopy option (half depth, halo roof, floor plate, cover, colours, accessories) rebuilds the site's canopy from scratch, which
+    // dropped the covered layout and left a single canopy; whenever a new canopy is put on the site while the car park is covered,
+    // the cover is laid again from it, so the options apply to every canopy in the car park
+    { let cur = S.product; Object.defineProperty(S, 'product', { configurable: true, enumerable: true, get: () => cur,
+        set: v => { cur = v; if (!(COVER && COVER.on && COVER.plan) || COVER.starting || !v || (v.userData && v.userData.cover)) return;
+          clearTimeout(COVER.t); COVER.t = setTimeout(() => { if (S.product !== v || !COVER || !COVER.on || !S.on) return; COVER.quiet = true;
+            try { applyCover(); } finally { COVER.quiet = false; } }, 0); } }); }
     function unhide(plan) { const boxes = plan.map(R => A.boxOf(R.obj).expandByScalar(1)); boxes.forEach(b => { b.min.y = -10; b.max.y = 200; });
       (S.blds || []).forEach(m => { m.visible = !boxes.some(b => m.userData.box && m.userData.box.intersectsBox(b)); }); }
     // validation report on the 3D stage: counts by severity, then the issues, most severe first
