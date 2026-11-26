@@ -1468,7 +1468,7 @@ const VGLB = { potted_plant_02: __B[14], outdoor_table_chair_set_01: __B[15], sh
 /* ---------- villa exterior: modern UAE villa with a three-car garage; the canopy stands on the driveway ---------- */
 ENV.indoor = false; ENV.indoorTrees = []; ENV.plazaTrees = []; ENV.villaProps = []; ENV.garageProps = [];
 ENV.colliders = []; const camRay = new T.Raycaster();
-ENV.villaGroup = new T.Group(); ENV.villaGroup.visible = false; scene.add(ENV.villaGroup);
+ENV.villaGroup = new T.Group(); ENV.villaGroup.visible = false; scene.add(ENV.villaGroup); window.__twinENV = ENV;   // a handle for twin-props.js (extra villa props)
 const slatTex = (rows, base, line) => { const c = document.createElement('canvas'); c.width = 64; c.height = 256; const g = c.getContext('2d');
   g.fillStyle = base; g.fillRect(0, 0, 64, 256); g.fillStyle = line; for (let i = 0; i < rows; i++) g.fillRect(0, i * 256 / rows, 64, 2);
   const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; t.wrapS = t.wrapT = T.RepeatWrapping; return t; };
@@ -3670,14 +3670,14 @@ requestAnimationFrame(tick);
 })();
 </script>
 <link rel="stylesheet" href="maplibre-gl.css">
-<link rel="stylesheet" href="twin-site.css?v=20261125m">
-<script src="twin-ui.js?v=20261125m"></script>
-<script src="twin-energy.js?v=20261125m"></script>
-<script src="twin-geo.js?v=20261125m"></script>
-<script src="twin-lanes.js?v=20261125m"></script>
-<script src="twin-reveal.js?v=20261125m"></script>
-<script src="twin-cable.js?v=20261125m"></script>
-<script src="twin-radar-ui.js?v=20261125m"></script>
+<link rel="stylesheet" href="twin-site.css?v=20261126c">
+<script src="twin-ui.js?v=20261126c"></script>
+<script src="twin-energy.js?v=20261126c"></script>
+<script src="twin-geo.js?v=20261126c"></script>
+<script src="twin-lanes.js?v=20261126c"></script>
+<script src="twin-reveal.js?v=20261126c"></script>
+<script src="twin-cable.js?v=20261126c"></script>
+<script src="twin-radar-ui.js?v=20261126c"></script>
 
 
 </body></html>
